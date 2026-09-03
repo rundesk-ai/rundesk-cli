@@ -927,6 +927,83 @@ class RunningAProgramThatAnswers(support.Isolated):
         ended = programs.run([sys.executable, "-c", "import sys; print(len(sys.stdin.read()))"], 10)
         self.assertEqual("0\n", ended.out)
 
+    def test_a_program_told_something_reads_it_and_then_reads_an_end(self):
+        # Both halves matter. A program handed a request but never an end-of-file waits for more,
+        # and the whole run then spends its ceiling waiting for a program that has already answered
+        # everything it was asked.
+        ended = programs.run(
+            [sys.executable, "-c", "import sys; said = sys.stdin.read(); print(len(said), said)"],
+            10, telling='{"words": "invoice"}')
+        self.assertIsNone(ended.trouble)
+        self.assertEqual('20 {"words": "invoice"}', ended.out.strip())
+
+    def test_said_nothing_and_said_empty_are_different_inputs(self):
+        # `None` is the closed input every caller had before this argument existed; `""` is a pipe
+        # carrying nothing and then closing, which a program waiting for a request can tell apart
+        # from one it may not read at all.
+        told = programs.run([sys.executable, "-c", "import sys; print(sys.stdin.isatty(), end='')"],
+                            10, telling="")
+        self.assertEqual("False", told.out)
+        self.assertIsNone(told.trouble)
+
+    def test_a_program_that_never_reads_its_input_is_still_answered(self):
+        # The request is written before the wait and fits the pipe, so a program that ignores its
+        # input entirely neither blocks this side nor is held up by it.
+        ended = programs.run([sys.executable, "-c", "print('ignored you')"], 10,
+                             telling="x" * 4096)
+        self.assertIsNone(ended.trouble)
+        self.assertEqual("ignored you", ended.out.strip())
+
+    def test_a_program_that_exited_before_being_told_is_its_own_answer(self):
+        """Writing into a closed pipe raises, and the program's own exit code is what a caller acts on.
+
+        **The write is forced rather than left to a buffer**, which is what makes this exercise the
+        path it is named for: a few kilobytes sit in the `TextIOWrapper` and are flushed by the
+        close long after the program has gone, so the case went green without a broken pipe ever
+        happening. Past `TOLD_AT_MOST` bytes the write itself reaches the pipe, and a program that
+        exited first breaks it.
+        """
+        ended = programs.run([sys.executable, "-c", "import sys; sys.exit(2)"], 10,
+                             telling="x" * (programs.TOLD_AT_MOST - 1))
+        self.assertIsNone(ended.trouble)
+        self.assertEqual(2, ended.code)
+
+    def test_more_than_can_be_handed_over_is_refused_rather_than_attempted(self):
+        ended = programs.run([sys.executable, "-c", "pass"], 10,
+                             telling="x" * (programs.TOLD_AT_MOST + 1))
+        self.assertIsNone(ended.code)
+        self.assertIn(programs.TOO_MUCH_TO_TELL, ended.trouble)
+
+    def test_an_answer_larger_than_a_pipe_holds_arrives_whole(self):
+        """The failure this drained: a program obeying the contract, blamed for the transport.
+
+        A pipe nobody is reading fills at about 64 KiB on this platform, and the program writing
+        into it then blocks for ever. Waiting first and reading afterwards turned that into `would
+        not finish` about a program that had finished everything except its last write — and a
+        channel adapter answering a `search` inside the ceilings `channels.adapters` publishes is
+        allowed to print several times that much.
+        """
+        for size in (60_000, 100_000, 1_000_000):
+            with self.subTest(size=size):
+                ended = programs.run([sys.executable, "-c", f"print('x' * {size})"], 10)
+                self.assertIsNone(ended.trouble)
+                self.assertEqual(size + 1, len(ended.out))
+
+    def test_a_program_that_never_stops_printing_is_bounded_rather_than_believed(self):
+        # Bounded *and* still read: stopping at the bound would put back the full pipe the drain
+        # exists to prevent, and keeping everything would let a program exhaust this process.
+        ended = programs.run([sys.executable, "-c", "\nwhile True: print('y' * 4096)"], 2)
+        self.assertIn(programs.WOULD_NOT_FINISH, ended.trouble)
+        self.assertEqual(programs.SAID_AT_MOST, len(ended.out))
+
+    def test_the_largest_request_that_may_be_handed_over_still_reaches_a_reader(self):
+        # The ceiling is the number that could deadlock, so it is the one worth exercising.
+        said = "x" * programs.TOLD_AT_MOST
+        ended = programs.run(
+            [sys.executable, "-c", "import sys; print(len(sys.stdin.read()))"], 10, telling=said)
+        self.assertIsNone(ended.trouble)
+        self.assertEqual(str(programs.TOLD_AT_MOST), ended.out.strip())
+
     def test_what_it_wrote_to_the_error_stream_is_kept_apart(self):
         ended = programs.run([sys.executable, "-c", "import sys; sys.stderr.write('wrong')"], 10)
         self.assertEqual("", ended.out)

@@ -205,6 +205,13 @@ class Running(NamedTuple):
     conversation, and a run that failed without saying anything would otherwise report the last run's
     answer as its own. Carried and written to disk for the same reason `announced` is — the gateway
     that reports may not be the one that started the work.
+
+    `reports_to` is the destination this firing announced into, or `None` for the agent's notified
+    channel. **Carried and written to disk for exactly the reason `announced` is, and it is the same
+    failure one step further on**: a gateway that came up after the one which started the work reads
+    the notice's id off the record, and a report quoting that id into a *different* destination is a
+    reply to a message that is not there. What a firing was aimed at when it began is a fact about
+    that firing, and the row it was read from can have been changed or removed since.
     """
 
     name: str
@@ -216,6 +223,7 @@ class Running(NamedTuple):
     asks: bool = False
     began: str = ""
     announced: Optional[str] = None
+    reports_to: Optional[due.Target] = None
 
 
 class Watching(NamedTuple):
@@ -275,16 +283,24 @@ class Telling(Protocol):
     rather than the words, because **what the agent actually answered is not something this layer can
     read** — the answer is in the agent's records and reaching them is `providers`' business, which
     `schedules` may not import. So the layer that may see both looks it up.
+
+    **All three take the firing's own destination, and none of them decides it.** A schedule may name
+    where it reports; `due.Target` is what it named, `None` is *nobody chose*, and the one resolver
+    on the other side of the seam turns either into a channel and a place. Passed on every call
+    rather than held on the object, because one gateway hosts every schedule an agent has and two
+    overlapping firings each keep their own — an implementation that closed over one destination
+    would send the second run's report to the first run's room.
     """
 
-    def say(self, saying: str) -> None:
+    def say(self, saying: str, aimed: Optional[due.Target] = None) -> None:
         ...
 
-    def announced(self, saying: str, within: float) -> Optional[str]:
+    def announced(self, saying: str, within: float,
+                  aimed: Optional[due.Target] = None) -> Optional[str]:
         ...
 
     def reported(self, schedule: str, answering: Optional[str], became: str,
-                 began: str) -> None:
+                 began: str, aimed: Optional[due.Target] = None) -> None:
         ...
 
 
@@ -530,7 +546,10 @@ def _reckoned(agent: str, where: Path, name: str, watching: Watching) -> None:
             # not. `asks` too: what a firing promised when it began is a fact about that firing, and
             # the row it was read from can have been edited or removed since.
             asks=bool(said.get("asks")), began=str(said.get("began") or ""),
-            announced=str(said.get("announced") or "") or None)
+            announced=str(said.get("announced") or "") or None,
+            # And the destination with them, for the reason `Running.reports_to` gives: the notice
+            # this run's report has to hang off stands in that destination and nowhere else.
+            reports_to=_as_read(said.get("reports_to")))
         return
     _note(where, f"schedule {name} was interrupted: the gateway that started it is gone, so "
                      "what it came to cannot be read", logs.WARNING)
@@ -678,7 +697,13 @@ def _spawned(agent: str, where: Path, watching: Watching, one: due.Schedule, min
     from_byte = output.stat().st_size if output.is_file() else 0
 
     said = {"schedule": one.name, "fired_for": minute, "from_byte": from_byte,
-            "started_at": logs.stamp(), "pid": None, "asks": asks, "began": began}
+            "started_at": logs.stamp(), "pid": None, "asks": asks, "began": began,
+            # An object rather than the tuple itself, because a `NamedTuple` is written out as an
+            # array and read back as a list — so the day a fourth field arrives, every record on
+            # disk means something different by its third position. Absent stays absent: *nobody
+            # chose* is what a schedule with no destination of its own says, and a record naming an
+            # empty channel would read as somebody having chosen nothing.
+            "reports_to": _as_written(one.reports_to)}
     # Before the spawn, without the pid, which does not exist yet — see the module docstring on the
     # one `os.replace` of window this leaves, and why the other order is worse.
     files.write_json(record_of(agent, one.name), said)
@@ -703,7 +728,8 @@ def _spawned(agent: str, where: Path, watching: Watching, one: due.Schedule, min
             if pid is not None:
                 watching.running[one.name] = Running(
                     name=one.name, pid=pid, fired_for=minute, mine=True, from_byte=from_byte,
-                    since=time.monotonic(), asks=asks, began=began)
+                    since=time.monotonic(), asks=asks, began=began,
+                    reports_to=one.reports_to)
 
     if trouble is not None:
         # A program that was never on the machine has no exit code, and reporting one would say it
@@ -735,7 +761,8 @@ def _spawned(agent: str, where: Path, watching: Watching, one: due.Schedule, min
             # on a pipe, and an unanchored report is the documented, survivable outcome.
             handle = telling.announced(
                 STARTING.format(named=one.name),
-                max(0.0, min(ANNOUNCED_WITHIN, announcing_until - time.monotonic())))
+                max(0.0, min(ANNOUNCED_WITHIN, announcing_until - time.monotonic())),
+                one.reports_to)
             if handle:
                 said["announced"] = handle
                 watching.running[one.name] = watching.running[one.name]._replace(announced=handle)
@@ -839,9 +866,9 @@ def _finished(agent: str, where: Path, one: Running, code: Optional[int],
             # that reported only what it had announced would swallow that run's answer entirely.
             # Anchored where there is a notice to anchor to, and standing on its own where there is
             # not, which is worse than anchored and far better than silent.
-            telling.reported(one.name, one.announced, outcome, one.began)
+            telling.reported(one.name, one.announced, outcome, one.began, one.reports_to)
         elif outcome != kept.DONE:
-            telling.say(f"schedule {one.name} {said}")
+            telling.say(f"schedule {one.name} {said}", one.reports_to)
 
 
 def let_go(agent: str, name: str) -> List[Path]:
@@ -1048,6 +1075,33 @@ def _read_record(agent: str, name: str) -> Dict[str, Any]:
     """
     how, said = files.read_json(record_of(agent, name))
     return dict(said) if how == files.READ and isinstance(said, dict) else {}
+
+
+def _as_written(aimed: Optional[due.Target]) -> Optional[Dict[str, str]]:
+    """One firing's own destination as the record keeps it, or nothing where it has none."""
+    if aimed is None:
+        return None
+    return {"channel": aimed.channel, "sender": aimed.sender, "place": aimed.place}
+
+
+def _as_read(said: Any) -> Optional[due.Target]:
+    """A destination read back off a record, or `None` where the record names none it can act on.
+
+    **`None` for anything that is not a whole one**, and that is the safe direction rather than the
+    tidy one. A record written by a release that did not keep this says nothing, and one somebody
+    edited into half a destination says nothing anybody can send to — both leave the report standing
+    on the agent's notified channel, which is where every schedule's report stood before this
+    existed. Read the other way round, a half-read destination would be a report sent to a channel
+    with no place at all: refused by the adapter, and the report lost with it.
+    """
+    if not isinstance(said, dict):
+        return None
+    channel = str(said.get("channel") or "")
+    sender = str(said.get("sender") or "")
+    place = str(said.get("place") or "")
+    if not channel or bool(sender) == bool(place):
+        return None
+    return due.Target(channel=channel, sender=sender, place=place)
 
 
 def _a_size(said: Any) -> int:

@@ -209,9 +209,13 @@ files, and no list anywhere has to say so.
 `<schedule>.lock` is claimed before the work starts and **held by the work itself**, so it lives
 exactly as long as that work and is dropped by the kernel however it ends — which is what makes "is
 this still running" a question with an honest answer after a crash, and what stops a terminal and a
-gateway each starting a copy. `<schedule>.json` says which minute the firing was for and what its
-process id is, written before the spawn so that a gateway killed outright still leaves something
-pointing at the work. `<schedule>.out` is everything that schedule's work has ever written, appended
+gateway each starting a copy. `<schedule>.json` says which minute the firing was for, what its
+process id is, and where the run reports if it named a destination of its own — written before the
+spawn so that a gateway killed outright still leaves something pointing at the work, and so that
+whichever gateway ends up reporting sends the answer into the destination the notice is standing in.
+A record that says nothing about a destination, or half of one, reports to the agent's notified
+channel; a schedule's own destination is three nullable columns in `state.db` (`channel` with exactly
+one of `channel_sender_id` and `channel_place_id`), and all three empty means *nobody chose*. `<schedule>.out` is everything that schedule's work has ever written, appended
 across runs and rotated by size.
 
 One protected schedule name, `weekly-self-improve-upkeep`, belongs to Rundesk rather than to an

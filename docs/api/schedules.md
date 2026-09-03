@@ -14,13 +14,15 @@ what each verb guarantees and what each refuses.
 | Command | Does |
 |---|---|
 | `schedules [list [<agent>] [--expired]]` | what one agent has scheduled, or every agent's |
-| `schedules add <agent> <schedule> --when '<cron>' \| --at <moment> --run '<program>' \| --ask '<prompt>' [--until <moment>] [--disabled]` | schedule something |
-| `schedules update <agent> <schedule> [--when \| --at \| --until \| --run \| --ask \| --enable \| --disable]` | change one, keeping what it has already done |
+| `schedules add <agent> <schedule> --when '<cron>' \| --at <moment> --run '<program>' \| --ask '<prompt>' [--until <moment>] [--disabled] [--channel <channel> --to <id>]` | schedule something |
+| `schedules update <agent> <schedule> [--when \| --at \| --until \| --run \| --ask \| --enable \| --disable \| --channel <channel> --to <id>]` | change one, keeping what it has already done |
 | `schedules show <agent> <schedule>` | everything one was given |
 | `schedules run <agent> <schedule> [--wait <seconds>]` | run one now, in this terminal (default 3600) |
 | `schedules remove <agent> <schedule>` | take one away |
 
-`--when` and `--at` are alternatives, never both. So are `--run` and `--ask`.
+`--when` and `--at` are alternatives, never both. So are `--run` and `--ask`. `--channel` and
+`--to` are the opposite of alternatives — they are one destination said in two parts, and one
+without the other is refused naming the part that is missing.
 
 Every agent also has one protected policy named `weekly-self-improve-upkeep`. It starts on and is
 shown even before it has a stored firing. Seven distinct local calendar dates on which that agent
@@ -129,11 +131,74 @@ is reported.
 [`schedules.md`](../concepts/schedules.md#what-a-run-says-on-a-surface-and-the-two-messages-it-is-allowed) is what
 that looks like and what happens when there is nowhere to say it.
 
+#### Where one schedule reports
+
+**`--channel` and `--to` together name one destination, instead of the agent's notified channel.**
+`--channel` is the platform, spelled the way `rundesk messages --channel` spells it and the way
+`rundesk channels` lists it. `--to` is where on it, **written exactly as an allow-list entry is
+written**: a bare sender id is that person's direct message and `place:<id>` is that place, which is
+what [`channels.md`](../concepts/channels.md#who-may-reach-an-agent-and-from-where) already says
+about the list itself. `sender:<id>` is accepted too, because the allow list accepts it.
+
+```console
+$ rundesk schedules add cole weekly-retro --when '0 12 * * 5' --ask 'Write the weekly retro.' --channel slack --to place:C0OPS
+schedule weekly-retro added for cole
+        when      0 12 * * 5
+        ask       Write the weekly retro.
+        until     not yet
+        enabled   yes
+        reports   slack place:C0OPS
+        next      2026-09-04 12:00
+        last      never ran
+        logs      /Users/you/.rundesk/data/agents/cole/logs
+        output    /Users/you/.rundesk/data/agents/cole/schedules/weekly-retro.out
+```
+
+**Naming neither keeps exactly what a schedule has always done** — the agent's notified channel and
+the place recorded on it — and says nothing extra. `reports` appears only where there is a
+destination, and the `REPORTS` column appears in a listing only once something in it has one, so an
+install where nothing is targeted reads exactly as it did before.
+
+**The agent's notified channel is not moved by any of this.** One schedule reporting into a Slack
+room and its agent going on being notified on Discord is the whole point of the verb.
+
+**Both are checked before anything is written, and each refusal names its own check:**
+
+| What is wrong | What is said |
+|---|---|
+| one flag without the other | `--channel slack says which channel and nothing said where on it` |
+| no adapter of that name on this install | `nothing on this install is a channel called telegram` |
+| the agent is not connected to it | `cole has no discord channel, so a schedule of cole's cannot report through one` |
+| the destination is not on that channel's allow list | `U0NOBODY is not on the slack channel's allow list, so a schedule may not report to them` |
+| named as a person, held as a place | `C0OPS names a person and the slack channel's allow list holds it as a place — say place:C0OPS to report there` |
+| named as a place, held as a person | `place:U0ANN names a place and the slack channel's allow list holds U0ANN as a person — say --to U0ANN for their direct message` |
+| the adapter cannot address a destination of its own | `the quiet adapter does not say it can address a destination of its own` |
+| `--to` naming nothing at all | `'place:' names nobody and nowhere` |
+
+The adapter's refusal — the row before last — is the adapter's own answer rather than a guess from
+its name: a sender id is not a conversation on any platform rundesk holds a credential for, so the
+adapter has to say it can resolve one. [`adapters.md`](../extending/adapters.md) publishes the field
+as `address` in `--capabilities`. It is asked at the moment the destination is written and kept
+nowhere: the `can` line `rundesk channels add` printed is the one place an owner has seen it, and
+neither `channels show` nor `channels doctor` repeats it.
+
+**The allow list is checked once, when the destination is written, and never again.** So taking
+somebody off a channel's allow list **does not** stop a schedule already pointed at them: it goes on
+reporting there. What stops it is `rundesk schedules remove <agent> <schedule>`, or pointing it
+somewhere else with `rundesk schedules update <agent> <schedule> --channel <channel> --to <id>`.
+That is deliberate rather than an oversight — re-checking at delivery would make a report vanish
+silently the day somebody tidied a list, and a report that visibly goes to the wrong person is
+easier to notice and fix than one that stops arriving.
+
 ### schedules update
 
 Changes one in place, keeping every record of what it has already done. **Only what is named moves**,
 and `--when` and `--at` replace each other — a schedule states a repeating time or one moment, never
 both. Naming nothing to change is refused rather than reported as a success.
+
+`--channel` and `--to` move a destination the same way, and moving it to a person clears the place
+it named, or the other way round: a schedule reports to one destination and the records refuse a row
+naming two. Naming the pair and nothing else is a change on its own.
 
 ```console
 $ rundesk schedules update cole nightly
@@ -159,8 +224,8 @@ schedule nightly for cole
         output    /Users/you/.rundesk/data/agents/cole/schedules/nightly.out
 ```
 
-`when`, `run`, `until` and `enabled` are what `add` and `update` wrote. `next` and `last` are worked
-out when you ask. **A schedule nobody can understand is still shown**, with the line that cannot be
+`when`, `run`, `until`, `enabled` and `reports` are what `add` and `update` wrote — `reports` only
+where one was written. `next` and `last` are worked out when you ask. **A schedule nobody can understand is still shown**, with the line that cannot be
 worked out saying so — it is on the disk and is something to be done about, so replacing the whole
 readout with a refusal would hide it.
 

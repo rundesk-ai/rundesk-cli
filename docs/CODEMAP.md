@@ -16,15 +16,16 @@ a higher one.
 | `dev` | the checkout runner; scrubs every `RUNDESK_*` variable, then sets one scratch root and prints it |
 | `install.sh` | fetches a release archive and hands off to `rundesk install` |
 
-## Command surface (src/rundesk/commands/ — 23 modules, 22 groups)
+## Command surface (src/rundesk/commands/ — 24 modules, 23 groups)
 
 One module per verb, and the only layer that may know `argparse`. Each takes a `Namespace` and
 returns an exit code. `src/rundesk/cli.py` owns parser assembly and dispatch; `src/rundesk/exits.py`
 owns the exit codes.
 
-Twenty-one public groups — `status`, `version`, `configure`, `agents`, `gateways`, `backups`, `env`,
-`login`, `ask`, `asked`, `messages`, `providers`, `permissions`, `turns`, `schedules`, `channels`,
-`skills`, `teams`, `install`, `update`, `uninstall` — plus `_oauth`, the private token bridge.
+Twenty-two public groups — `status`, `version`, `configure`, `agents`, `gateways`, `backups`, `env`,
+`login`, `ask`, `asked`, `messages`, `search`, `providers`, `permissions`, `turns`, `schedules`,
+`channels`, `skills`, `teams`, `install`, `update`, `uninstall` — plus `_oauth`, the private token
+bridge.
 
 ## Domain packages (src/rundesk/ — 11)
 
@@ -47,17 +48,18 @@ Twenty-one public groups — `status`, `version`, `configure`, `agents`, `gatewa
 Flat, concrete, and product-agnostic. Imports only the standard library and its own siblings, carries
 no product terms, and keeps an accurate table in its `__init__.py`.
 
-## Migrations (src/rundesk/agents/steps/ — 13; src/rundesk/lifecycle/steps/ — 0)
+## Migrations (src/rundesk/agents/steps/ — 14; src/rundesk/lifecycle/steps/ — 0)
 
 Numbered, discovered, and **immutable once shipped** — never renumbered, renamed, or edited. The
 agent steps run from `0001_the_records_an_agent_keeps` to
-`0013_the_models_a_turn_knows_and_the_counters_it_keeps`. The lifecycle registry exists and holds no
-shipped step yet.
+`0014_where_one_schedule_reports`. The lifecycle registry exists and holds no shipped step yet.
 
 ## Adapters (src/ — 6)
 
 Executables with a shebang and no `.py`, run as separate programs exchanging newline-delimited JSON.
-Being extensionless is why a directory-scanning lint does not see them.
+Being extensionless is why a directory-scanning lint does not see them. A channel adapter answers
+five invocations: `--capabilities`, `--check` and `serve` for the owner and the gateway, and `search`
+and `fetch` for the agent itself.
 
 - `src/channels/` — `discord`, `slack`
 - `src/providers/` — `codex`, `claude`, `grok`, `antigravity`
@@ -69,7 +71,7 @@ Being extensionless is why a directory-scanning lint does not see them.
 | `src/skills/` | the bundled `rundesk` catalog: `manifest.json` and 4 packages — `delegating-work`, `managing-github`, `managing-rundesk`, `writing-skills` |
 | `src/templates/` | the agent home: an `AGENTS.md`/`CLAUDE.md` pair placed from one source, `MEMORY.md`, and purpose-named area templates for plans, research, retros, scripts, and tasks |
 
-## Tests (tests/ — 86 suites, 3 support modules)
+## Tests (tests/ — 88 suites, 3 support modules)
 
 Directly runnable `unittest` suites. `tests/support.py` gives every case a temporary root, asserts
 that Rundesk resolved that root before the case runs, and points the proxy variables at a closed port
@@ -86,7 +88,7 @@ agent-guide heading contract, and the repository template digests.
 ## Documentation (docs/)
 
 Three files at the root — `README.md`, `BRIEF.md`, `CODEMAP.md` — and every other page in a home:
-`api/` (10 pages), `concepts/` (12), `guides/` (8), `extending/` (3), `requirements/` (8),
+`api/` (10 pages), `concepts/` (12), `guides/` (8), `extending/` (3), `requirements/` (10),
 `research/` (33), plus `assets/`. Each home carries its own index.
 
 ## Repository configuration (root)

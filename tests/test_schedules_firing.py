@@ -15,6 +15,7 @@ Run directly: `python3 tests/test_schedules_firing.py`
 import contextlib
 import datetime
 import fcntl
+import json
 import os
 import shlex
 import shutil
@@ -22,6 +23,7 @@ import signal
 import time
 import unittest
 from pathlib import Path
+from typing import ClassVar, Dict
 from unittest import mock
 
 import support
@@ -781,17 +783,24 @@ class ATelling:
         self.announced_saying = []
         self.waited = []
         self.reports = []
+        #: Where each of the three was aimed, in the order they were said. A firing may name its own
+        #: destination, and a seam that dropped it would let a report go to the agent's notified
+        #: channel with every case here still green.
+        self.aimed_at = []
 
-    def say(self, saying):
+    def say(self, saying, aimed=None):
         self.remarks.append(saying)
+        self.aimed_at.append(aimed)
 
-    def announced(self, saying, within):
+    def announced(self, saying, within, aimed=None):
         self.announced_saying.append(saying)
         self.waited.append(within)
+        self.aimed_at.append(aimed)
         return self.handle
 
-    def reported(self, schedule, answering, became, began):
+    def reported(self, schedule, answering, became, began, aimed=None):
         self.reports.append((schedule, answering, became))
+        self.aimed_at.append(aimed)
 
 
 class SayingAScheduleHasBegun(Firing):
@@ -877,7 +886,7 @@ class SayingAScheduleHasBegun(Firing):
         is spent by waiting, so a fake that never waits never spends it.
         """
         class WaitsLikeAPlatform(ATelling):
-            def announced(self, saying, within):
+            def announced(self, saying, within, aimed=None):
                 self.waited.append(within)
                 time.sleep(within)               # what a platform that never acknowledges costs
                 return None
@@ -911,7 +920,7 @@ class SayingAScheduleHasBegun(Firing):
         self.an_asking_schedule()
 
         class Refuses(ATelling):
-            def announced(self, saying, within):
+            def announced(self, saying, within, aimed=None):
                 raise OSError("the platform is down")
 
         after = self.look(asking=self.a_runner(), telling=Refuses())
@@ -989,9 +998,120 @@ class ReportingWhatAScheduleCameTo(Firing):
         self.assertEqual(kept.DONE, self.outcome_of("review"))
 
 
+class WhereOneFiringReports(SayingAScheduleHasBegun):
+    """R-SCH-57. A schedule may report somewhere of its own, and its firing carries that with it.
+
+    Two overlapping firings each keep their own, and a firing keeps the one it began with even after
+    the gateway that started it is gone — because the notice its report has to hang off stands in
+    that destination and nowhere else.
+    """
+
+    #: The two destinations these cases aim a schedule at, shared across the class on purpose:
+    #: they are the columns a row is written with, read by every case and mutated by none.
+    #: `ClassVar` says that rather than leaving a mutable default for a reader to wonder about —
+    #: the call `tests/test_packages.py` already makes about its own shared mapping.
+    A_PLACE: ClassVar[Dict[str, str]] = {"channel": "slack", "channel_place_id": "C0OPS"}
+    A_PERSON: ClassVar[Dict[str, str]] = {"channel": "discord", "channel_sender_id": "2207"}
+
+    def test_a_schedule_with_no_destination_aims_its_notice_at_nothing(self):
+        # *Nobody chose*, which the resolver on the other side of the seam turns into the agent's
+        # notified channel exactly as it did before any of this existed.
+        self.an_asking_schedule()
+        telling = ATelling()
+        self.look(asking=self.a_runner(), telling=telling)
+        self.assertEqual([None], telling.aimed_at)
+
+    def test_a_notice_is_aimed_where_the_schedule_says(self):
+        self.an_asking_schedule(**self.A_PLACE)
+        telling = ATelling()
+        self.look(asking=self.a_runner(), telling=telling)
+        self.assertEqual([due.Target("slack", "", "C0OPS")], telling.aimed_at)
+
+    def test_a_report_is_aimed_where_the_notice_went(self):
+        # The two have to agree or the report quotes a message that is not in the room it lands in.
+        self.an_asking_schedule(**self.A_PLACE)
+        telling = ATelling()
+        after = self.look(asking=self.a_runner(), telling=telling)
+        self.waited_until_it_is_over(after, "review", telling)
+        self.assertEqual([due.Target("slack", "", "C0OPS")], list(set(telling.aimed_at)))
+
+    def test_a_failed_program_is_said_out_loud_where_the_schedule_says(self):
+        # The third verb of the seam. A program has no answer to report, so what it gets is a
+        # remark — and a remark about a schedule aimed somewhere goes there too.
+        self.given("tick", command=FAILS, **self.A_PERSON)
+        telling = ATelling()
+        after = self.look(telling=telling)
+        self.waited_until_it_is_over(after, "tick", telling, remarks=True)
+        self.assertEqual([due.Target("discord", "2207", "")], telling.aimed_at)
+
+    def test_it_is_written_into_the_record_beside_the_notice(self):
+        self.an_asking_schedule(**self.A_PLACE)
+        self.look(asking=self.a_runner(NEVER_ENDING), telling=ATelling(handle="8841"))
+        said = records_of_the_firing(self, "review")
+        self.assertEqual({"channel": "slack", "sender": "", "place": "C0OPS"},
+                         said.get("reports_to"))
+
+    def test_a_gateway_that_came_up_after_the_one_that_started_it_still_knows_where(self):
+        """The report has to land in the destination the notice stands in, and the row it was read
+        from can have been changed or removed since the work began."""
+        self.an_asking_schedule(**self.A_PLACE)
+        self.look(asking=self.a_runner(NEVER_ENDING), telling=ATelling(handle="8841"))
+        self.waited_until_the_firing_is_really_in_flight("review")
+        adopted = firing.settled(self.agent, self.where)
+        self.assertEqual(due.Target("slack", "", "C0OPS"), adopted.running["review"].reports_to)
+
+    def test_a_firing_started_before_this_release_reports_to_the_notified_channel(self):
+        # A record written by a release that did not keep this says nothing, and the safe direction
+        # is the one every scheduled report already took.
+        self.an_asking_schedule()
+        self.look(asking=self.a_runner(NEVER_ENDING), telling=ATelling(handle="8841"))
+        self.waited_until_the_firing_is_really_in_flight("review")
+        at = firing.record_of(self.agent, "review")
+        said = json.loads(at.read_text(encoding="utf-8"))
+        said.pop("reports_to", None)
+        at.write_text(json.dumps(said), encoding="utf-8")
+        adopted = firing.settled(self.agent, self.where)
+        self.assertIsNone(adopted.running["review"].reports_to)
+
+    def test_half_a_destination_on_a_record_reports_to_the_notified_channel(self):
+        # Never half-read into a channel with no place at all: that is refused by the adapter, and
+        # the report is lost with it.
+        self.an_asking_schedule()
+        self.look(asking=self.a_runner(NEVER_ENDING), telling=ATelling(handle="8841"))
+        self.waited_until_the_firing_is_really_in_flight("review")
+        at = firing.record_of(self.agent, "review")
+        said = json.loads(at.read_text(encoding="utf-8"))
+        said["reports_to"] = {"channel": "slack", "sender": "", "place": ""}
+        at.write_text(json.dumps(said), encoding="utf-8")
+        adopted = firing.settled(self.agent, self.where)
+        self.assertIsNone(adopted.running["review"].reports_to)
+
+    def test_two_overlapping_firings_each_keep_their_own(self):
+        """One gateway hosts every schedule an agent has. A seam that held one destination would
+        send the second run's report into the first run's room."""
+        self.an_asking_schedule("review", **self.A_PLACE)
+        self.an_asking_schedule("brief", **self.A_PERSON)
+        telling = ATelling()
+        self.look(asking=self.a_runner(NEVER_ENDING), telling=telling)
+        self.assertEqual({due.Target("slack", "", "C0OPS"), due.Target("discord", "2207", "")},
+                         set(telling.aimed_at))
+
+    def waited_until_it_is_over(self, after, name, telling, remarks=False):
+        """Beat the loop until this firing has ended and the seam has been told about it."""
+        watching = after
+        wanted = (lambda: bool(telling.remarks)) if remarks else (lambda: bool(telling.reports))
+        for _ in range(200):
+            watching = firing.looked(
+                self.agent, self.where, watching,
+                moment=datetime.datetime(2026, 8, 5, 9, 0, 30), telling=telling)
+            if wanted():
+                return watching
+            time.sleep(0.05)
+        raise AssertionError(f"{name} never reported")
+
+
 def records_of_the_firing(case, name):
     """What is written beside a firing while it runs, as the record on disk really holds it."""
-    import json
     return json.loads(firing.record_of(case.agent, name).read_text(encoding="utf-8"))
 
 

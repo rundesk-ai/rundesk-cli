@@ -61,7 +61,9 @@ eventually disagree about the same person, and the one they disagreed about woul
 a control.
 
 **The decision is made against two stable ids and never against a word.** An adapter reports `user`
-and `external_place`; `display` and `where` are sentences it composed for a person to read, and a
+and `external_place`; `display` and `where` are sentences it composed for a person to read, `mention`
+is the platform's own markup for mentioning the speaker — handed to the agent for that alone, so it
+can mention the person it is answering without ever being shown or saying a bare id — and a
 display name is somewhere a stranger writes whatever they like. **A place entry allows anybody who is
 somebody** — a record with no sender is an event rather than a person, and admitting one because of
 where it happened would make a place entry a way in for anything that can post there.
@@ -75,6 +77,23 @@ notices, scheduled results and other unprompted messages go to; it does not sele
 shipped Discord adapter privately gives every user on that channel's allowlist one copy. The channel
 is moved in one transaction rather than set directly, because a caller that clears the old one and
 then fails to set the new leaves an agent that tells nobody anything.
+
+**One caller may name its own destination instead, and it is written the same way this list is.** A
+schedule may report to one place or one person's direct message on a channel of its own choosing —
+`docs/concepts/schedules.md` is what that is for. It reaches the same resolver everything unprompted
+reaches and replaces the notified channel there, so there is one answer to *where does this go*; it
+is checked against **this** list before it is written, because a destination the list does not name
+would be a way to reach a person around it; and it is never fanned out, because it is one
+destination somebody chose. `channels.kept.admitted_by` reads the string either way, so `place:C0OPS`
+means the same thing in both places.
+
+**Resolving one is the adapter's, and the reason is the credential.** A sender id names a person, not
+the conversation they read, and opening that conversation is a call only the adapter can make;
+the string an adapter composes for a place is its own, and rundesk never parses one. So the two ids
+cross the seam as themselves and the adapter answers *where* — behind
+`address` in its `--capabilities`, which is what lets rundesk refuse a destination it could not
+deliver at the moment somebody types it. [`../extending/adapters.md`](../extending/adapters.md) is
+the contract.
 
 ## The adapter is a child, and its claim is the check
 
@@ -170,6 +189,36 @@ overwritten.
 screenshot remains owned by the tool that made it. Rundesk owns only the landed copies under the
 channel's dated `in/` directory.
 
+## Looking the other way: what the agent asks the channel
+
+Everything above is a channel carrying a message *to* an agent. A channel is also how an agent asks a
+question of the platform behind it — `rundesk search`, run by the agent mid-turn, as often as the
+question needs.
+
+**The same connection, and nothing more than it.** A search is handed the identity, allow list and
+credentials the channel is hosted with, so what it can reach is what that bot was admitted to: rooms
+it was invited to, and private conversations it is part of. Not a person's own messages with somebody
+else, and not a room the bot was never invited to. There is no scope on the command and none
+available to it.
+
+**One shape for every platform.** Each adapter answers the same request and returns the same row —
+who said it, where, when, the words, a link, and what is attached — so an agent learns this once and
+an agent with no channels has no search. What a platform can actually do differs a great deal and
+belongs to that platform's guide; the seam does not.
+
+**A search that did not finish is its own answer.** Found, found nothing, stopped early, and could
+not look are four states, and the third is never printed as an empty list on its own. An agent that
+read a spent budget as an absence would conclude a thing was never discussed.
+
+**Nothing a search finds is written down.** Results were said to somebody else, somewhere else, so
+they are handed back and never enter this agent's records, its conversations, or a backup. The one
+exception is a file: an attachment brought in by `--fetch` lands under the channel's dated `in/`
+directory, under the message it came from, owned and swept exactly like one that arrived on its own.
+There is no second place for it.
+
+See [`../api/conversations.md`](../api/conversations.md#search) for the verb and
+[`../extending/adapters.md`](../extending/adapters.md#search) for the contract an adapter answers.
+
 ## When a channel is not answering
 
 `rundesk channels doctor [<agent>]` names what cannot be used and why, and exits non-zero when
@@ -183,3 +232,5 @@ anything is wrong.
 | a Slack bot is connected and answers nothing at all | `rundesk gateways logs <agent>` names each boundary the websocket reached — see [`../guides/slack.md`](../guides/slack.md) |
 | nothing unprompted ever arrives | no channel is `--notify` |
 | the credential is set and the channel still fails | the value is kept under the adapter's own scoped name; `channels doctor` says which name it looked for |
+| `rundesk search` says a channel offers no search | that adapter does not answer the `search` invocation. Nothing is wrong with the channel and nothing is retried for it |
+| a search finds nothing that is plainly there | the bot was not invited to that place. A search sees what the bot sees, never what you see |

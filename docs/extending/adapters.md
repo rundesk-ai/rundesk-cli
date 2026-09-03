@@ -78,17 +78,34 @@ The virtualenv can be absent — a machine with no network has a working install
 an adapter with a dependency answers `--check` with the `ImportError` as the refusal it is, rather
 than pretending otherwise.
 
-## The three invocations
+## The five invocations
 
-| | Bounded | What it is |
-|---|---|---|
-| `--capabilities` | 60 s | what you can do — offline, no account, the same answer every time |
-| `--check` | 300 s | sign in, and report what you reached |
-| `serve` | not bounded | hold the connection open for as long as the agent is up |
+| | Bounded | Asked by | What it is |
+|---|---|---|---|
+| `--capabilities` | 60 s | the owner, and every search | what you can do — offline, no account, the same answer every time |
+| `--check` | 300 s | the owner | sign in, and report what you reached |
+| `serve` | not bounded | the gateway | hold the connection open for as long as the agent is up |
+| `search` | 60 s | **the agent** | look through your platform and answer what you found |
+| `fetch` | 300 s | **the agent** | bring one result's attachments onto this machine |
 
 **Match them exactly rather than searching argv.** An adapter that took a mistyped `--check` for a
 request for its capabilities would answer a question nobody asked and look as though it worked.
-Anything that is not one of the three: say so on stderr and exit non-zero.
+Anything that is not one of the five: say so on stderr and exit non-zero — which is also how an
+adapter written before `search` existed behaves correctly without being touched.
+
+**The last two are the agent's, and none of the first three are.** `--capabilities` and `--check` are
+asked while somebody is at a terminal connecting a channel, and `serve` is what a gateway hosts.
+`search` and `fetch` are asked in the middle of a turn, by the agent itself, of a channel that is
+already connected — and asked again as it narrows what it wants. That is what sets their ceilings and
+why neither may wait, retry, or hold anything.
+
+**Neither of them is optional, and neither is required.** An adapter that does not offer search says
+so by leaving `search` out of `--capabilities`, and is then never run with a credential for it. It is
+not a lesser adapter and nothing is retried for it.
+
+**Neither takes the channel's claim.** Both run as their own short-lived programs, beside a `serve`
+that may already be running for the same channel — so both work with a gateway up or down, and
+neither may open a second connection to a platform that counts them.
 
 **Nothing from rundesk's own environment reaches you except a named handful.** `PATH`, `HOME`,
 `TMPDIR`, `TZ`, `LANG`, `LC_ALL` are carried through if they are set; `TERM` is set to `dumb`,
@@ -124,13 +141,15 @@ Asked offline and with no account, so that **a fidelity difference is a fact rat
 an adapter that cannot edit a message is told apart from one that can and did not.
 
 ```json
-{"stream": true, "edit": "full", "react": true, "thread": true, "attach": true, "max_text": 2000}
+{"stream": true, "edit": "full", "react": true, "thread": true, "attach": true,
+ "address": true, "search": true, "max_text": 2000}
 ```
 
 That is the shipped Discord adapter's answer, and it is a fair template. **Be honest about what is in
 it**, and know what it costs today: rundesk asks the question, prints the answer on the `can` line of
 `channels add`, and **keeps none of it** — the `channels` table has no column for it, so `channels
-show` has nothing to show and nothing anywhere reads a key. See
+show` has nothing to show. Three keys are read: `max_text`, `stream`, and
+[`address`](#address-decides-whether-a-destination-may-be-named). See
 [what is not built yet](#what-is-not-built-yet).
 
 ### `--check`
@@ -259,6 +278,119 @@ table exists to avoid.
 handles the signal — the shipped one does, and had to: the goodbye and every last write were simply
 never reached before it did.
 
+### `search`
+
+**argv:** exactly `search`.
+
+**Environment:** the handful, plus `RUNDESK_AGENT`, `RUNDESK_CHANNEL`, `RUNDESK_SETTINGS`,
+`RUNDESK_ALLOW`, `RUNDESK_ALLOW_PLACES`, and each credential you named — the same values you are
+hosted with, out of the same names, for the same agent. **Not `RUNDESK_CHANNEL_HOME`**: only `fetch`
+stages a file, and a variable an invocation cannot use is one it must not come to depend on.
+
+**stdin:** a pipe carrying **one JSON object, then end-of-file**. This is the first invocation that
+is asked a question rather than only told to answer one, and it arrives here rather than on argv:
+argv is readable through the process list, and a request is somebody's words.
+
+```json
+{"words": "the invoice bug", "place": "C0OPS", "user": "U0ANN",
+ "since": "2026-08-01", "until": "2026-08-31", "limit": 20}
+```
+
+| | |
+|---|---|
+| `words` | what to look for, already clipped to 400 characters |
+| `place` | one place's id, as **you** reported it in `external_place`. `""` is everywhere you can reach |
+| `user` | one sender's id. `""` is anybody |
+| `since`, `until` | inclusive days, `YYYY-MM-DD`. `""` is unbounded |
+| `limit` | how many results to answer with, between 1 and 100 |
+
+**Every key is always present, and `""` means unscoped.** Said-nothing and said-empty are kept apart
+everywhere else in this product and are deliberately one answer here: a scope has no third meaning,
+so you never have to decide what a missing key would have meant.
+
+**Print:** one JSON object, read the same way as the other two.
+
+**Exit code:** not read. Exit `0` even for `ok: false`, exactly as on `--check`.
+
+```json
+{"ok": true,
+ "results": [{"who": "U0ANN", "display": "Dana", "where": "the ops room",
+              "external_place": "C0OPS", "when": "2026-08-30T14:02:11Z",
+              "text": "can we re-send the invoice?", "link": "https://…",
+              "ref": "C0OPS/1725026531.000200",
+              "attachments": [{"name": "plan.pdf", "bytes": 81920}]}],
+ "looked": {"places": 7, "messages": 1400},
+ "partial": ""}
+```
+
+| Field | | What it is |
+|---|---|---|
+| `ok` | required | whether this is an answer at all. Anything falsy is a refusal |
+| `why` | on a refusal | the sentence the agent acts on |
+| `results` | optional | what you found. Absent and empty are the same thing |
+| `looked` | optional | `places` and `messages` you really examined. **Leave a key out rather than reporting a number you did not measure** — rundesk reads an absent one as *did not say*, and a zero as *looked at none* |
+| `partial` | optional | **the sentence saying you did not finish.** `""` means you did |
+
+Each result:
+
+| | | |
+|---|---|---|
+| `who` | required | the id the platform knows the speaker by |
+| `when` | required | when it was said |
+| `text` | required unless `attachments` | what was said |
+| `ref` | required | **your own opaque handle for this one message**, at most 64 characters, and what `fetch` is given back. `"<place>/<message>"` is the obvious shape |
+| `display` | optional | what the platform calls the speaker |
+| `where` | optional | **one ordinary sentence** saying where this was said — the same field, meaning the same thing, as on an `arrived` |
+| `external_place` | optional | the platform's id for that place, and what `place` is typed with next time |
+| `link` | optional | somewhere a person can open it |
+| `attachments` | optional | `name` and `bytes` per file, **described and not fetched** |
+
+<a id="the-four-outcomes"></a>
+#### Four outcomes, and the third is why this shape exists
+
+| | |
+|---|---|
+| **found** | `ok`, `results` has some, `partial` is `""` |
+| **found nothing** | `ok`, `results` is empty, `partial` is `""` — you looked everywhere you were asked to |
+| **looked as far as you could** | `ok`, `partial` is your sentence. `results` may be empty **or not** |
+| **could not look** | not `ok`, and `why` is your sentence |
+
+**A spent budget is its own outcome and never a flavour of finding nothing.** Those two are the same
+empty list, and an agent that reads the first as the second concludes the thing was never discussed —
+which is the one wrong answer this whole capability can give. If you stopped early, say so in
+`partial`, whether or not you found anything on the way.
+
+**Never sleep and never retry.** A rate limit, a budget, a page you did not reach: each of those is a
+sentence in `partial` and the end of the search. An agent is waiting, and it can always ask again.
+
+### `fetch`
+
+**argv:** exactly `fetch`.
+
+**Environment:** everything `search` gets, **plus `RUNDESK_CHANNEL_HOME`** — this channel's own
+directory, made before you are started.
+
+**stdin:** one JSON object: `{"ref": "C0OPS/1725026531.000200"}` — a `ref` you yourself printed.
+
+```json
+{"ok": true, "message": "1725026531.000200", "partial": "",
+ "attachments": [{"at": "/…/fetched/1725026531.000200/0", "name": "plan.pdf", "bytes": 81920}]}
+```
+
+`message` is the platform's own id for the message these came from, and is what the landed copies are
+filed under — so a searched attachment stands in the same dated directory, under the same message, as
+one that arrived on its own. Each entry of `attachments` is exactly what an `arrived` carries, is read
+by the same code, and is held to the same rules: inside `RUNDESK_CHANNEL_HOME`, an ordinary file, and
+`bytes` is **what the platform said** rather than your own measurement of what you wrote.
+
+**Rundesk removes what you staged, taken or refused.** Do not clean up after yourself and never report
+a path you have not written.
+
+**Reach the message again before you download it.** One platform signs its attachment links with an
+expiry and publishes nothing that refreshes one, so a link you carried over from a search result is a
+link already going stale. That is the whole reason this is a second invocation rather than a field on
+a result.
+
 ## The record vocabulary
 
 One JSON object per line, both ways. Nothing is nested inside anything and nothing spans lines.
@@ -319,6 +451,7 @@ for goes to stderr; see [the rules](#the-rules-that-will-bite).
 | `attachments` | required unless `text` | what they attached, already fetched onto this machine — see below |
 | `external_id` | optional | the platform's own id for this message. **Without it there is no redelivery guard and no `seen` mark** |
 | `display` | optional | what the platform calls the person speaking. Reaches the brain, so an agent in a room can address somebody by name |
+| `mention` | optional | **your platform's own markup for mentioning the speaker** — `<@U012ABCDEF>` on Slack, `<@123456789012345678>` on Discord. It reaches the brain beside the name with one instruction: it is for mentioning that person and is never said as words, and the bare id never reaches a prompt at all. One token, at most 64 characters, or rundesk drops it rather than teaching half a handle. Send only a handle your own `deliver` path carries to the platform as a real mention |
 | `where` | optional | **one ordinary sentence** saying where this was said — `a direct message`, `the ops room in Acme`. Rundesk never parses it and never names a room itself; what a place is called is the one thing only you know |
 | `external_place` | optional | the platform's own id for the place this was said in. **Read, and read for one thing only** — see [who may be answered](#who-may-be-answered). Never shown, never stored, never parsed |
 | `reply_to` | optional | the earlier message this one answers — see below. Left out entirely when it answers nothing |
@@ -424,6 +557,9 @@ Five, and only five exist today.
 {"do": "deliver", "id": "1754431200.123456-2-9", "place": "1180", "text": "here it is",
  "files": [{"name": "chart.png", "at": "/…/agents/alan/home/chart.png", "bytes": 9,
             "sha256": "b1f3…"}]}
+{"do": "deliver", "id": "1754431200.123456-3-2", "place": "", "text": "the weekly retro",
+ "to": {"place": "C0OPS"}, "reply_to": "8841", "threaded": "weekly-retro",
+ "notice": true}
 {"do": "state", "place": "1180", "external_id": "8841", "state": "seen"}
 {"do": "state", "place": "1180", "state": "failed"}
 {"do": "activity", "place": "1180", "did": "run"}
@@ -437,7 +573,7 @@ Five, and only five exist today.
 
 | | Fields | |
 |---|---|---|
-| `deliver` | `id`, `place`, `text`, sometimes `files`, `reply_to`, `cost`, `notice`, or `remark` | post it. `id` is rundesk's own handle for this piece, of the shape `<unix time>-<n>`; hand it back on a `failed`. `notice: true` means nobody prompted this delivery in one conversation; `place` remains its compatible primary destination |
+| `deliver` | `id`, `place`, `text`, sometimes `files`, `reply_to`, `cost`, `notice`, `remark`, `to`, or `threaded` | post it. `id` is rundesk's own handle for this piece, of the shape `<unix time>-<n>`; hand it back on a `failed`. `notice: true` means nobody prompted this delivery in one conversation; `place` remains its compatible primary destination unless `to` supersedes it |
 | `state` | `place`, `state`, sometimes `external_id` | show what rundesk says a turn is doing. `external_id` names the message the state belongs to; **without one the state belongs to the place** — see below |
 | `activity` | `place`, `did`, sometimes `ok`, sometimes `who` | show what the agent is doing, while it is still doing it |
 | `delegation` | `place`, `state`, `who`, `ask`, sometimes `elapsed`, sometimes `provider` and with it sometimes `provider_alias` | show what became of work this agent handed to another agent, which brain is doing it, and what has just been done to it |
@@ -455,6 +591,39 @@ privately address the allowed identities may give each one a copy; the shipped D
 An adapter that does not implement fan-out ignores the optional field and keeps delivering to
 `place`, which preserves the existing contract. Never infer this from the text and never fan out a
 delivery without it: ordinary answers belong only in the conversation that asked.
+
+<a id="address-decides-whether-a-destination-may-be-named"></a>
+**`to` is one destination rundesk was given rather than one it recorded, and it supersedes
+`place`.** It arrives only on an adapter that declared `address: true`, and it holds exactly one of
+two keys — `{"sender": "<id>"}` for that person's own conversation, or `{"place": "<id>"}` for that
+place. **The ids are the platform's own**, the same ones an allow list names, because rundesk holds
+no credential for your platform: it cannot open a conversation with somebody, and the string you
+compose for a place is yours and rundesk never parses one. So resolving it is yours, and it is the
+whole reason the field exists. `place` is empty beside it and must not be read.
+
+**Declare `address` only if you will resolve one, and refuse rather than degrade.** Where you cannot
+reach the named destination, answer `failed` and say why: every other place in reach is one nobody
+chose, and a report that arrived somewhere plausible is worse than one that visibly did not arrive.
+An adapter that declares nothing has rundesk refuse `--to` for its channel where somebody typed it,
+which is the honest outcome — see [`schedules.md`](../api/schedules.md).
+
+**A delivery carrying `to` is never fanned out**, whatever `notice` says. The two are separate facts:
+`notice` is *nobody prompted this*, which is why it may be announced at all, and `to` is *this one
+destination*, which somebody chose. Copying an aimed delivery to every allowed identity posts it to
+people it was deliberately not addressed to.
+
+**`threaded` is the name to give a thread hanging off `reply_to`**, rather than a flag. It arrives
+only beside a `reply_to` and only on an adapter that declared `address`, and it means *this belongs
+in a thread on that message* rather than *quote that message* — so it is on every piece of a split
+report, where a quote is on the first alone. It is a name because a thread is a place with a label
+on it and only rundesk knows what the run was; reading the words and inventing one is the guessing
+every other field here exists to avoid.
+
+Open one, remember it by the message it hangs off so a second delivery joins the same thread, and
+**degrade to the place if the platform will not** — a report in the room is worse than a report in a
+thread and far better than no report, which is the trade the shipped Discord adapter already makes
+answering a room. A platform on which a reply *is* a thread has nothing to open and ignores the name,
+which is what the shipped Slack adapter does with `thread_ts`.
 
 **`remark: true` is rundesk saying *this one is not the answer yet*.** It marks prose the agent
 finished saying on its way to answering, which is otherwise indistinguishable from the answer: both
@@ -765,6 +934,15 @@ Rundesk's, unless the last column says otherwise.
 | ceiling on `--capabilities` | 60 s | the one place an unvetted program runs before anything is written down. The answer needs no network and no account, so a minute is already generous |
 | ceiling on `--check` | 300 s | it signs in to somebody else's service over somebody else's network — and a person is standing at a terminal waiting for it |
 | ceiling on `serve` | none | a program that will still be here in six months |
+| ceiling on `search` | 60 s | an agent is mid-turn and will ask again after reading the answer. An adapter that cannot finish inside it is expected to stop and say so in `partial`, not to be cut off here |
+| ceiling on `fetch` | 300 s | it is downloading rather than reading an index, and how big a file may be is bounded by size rather than by the clock |
+| a request handed to an adapter on stdin | 16 KiB | written whole before the wait, so a program that has not read a byte yet still takes it and neither side blocks. Larger needs a reader on the far end |
+| results one search answers with | 100 | asked for 20 unless somebody says otherwise. A platform asked for five thousand is one paginated until it refuses |
+| a search result's own fields | 400 chars of words asked for, 1000 of text, 80 of name, 60 of place, 240 of `partial` | **rundesk's, applied whatever an adapter promised.** Every one of them is a stranger's words, and the bound that protects a prompt is the one that runs where the prompt is composed |
+| a result's ids — `who`, `external_place`, `ref` | 120 chars, 120, and **64** | flattened and clipped exactly as a display name is. **An id looks like the one field a stranger did not write and is not**: `who` is what gets printed whenever `display` is left out, and `ref` is printed on every row and typed straight back into `fetch` |
+| files one result may describe | 10 | the same number and the same reason as an arriving message's: a listing is not somewhere a stranger gets to fill either |
+| files one `fetch` may land | 10 | bounded again on rundesk's side. More than that are named and the first ten still come |
+| what a program may print in answer | 8 MiB | read and thrown away past there rather than left in the pipe — stopping the read would block the program, and keeping it all would let one that prints without stopping exhaust rundesk. Two orders above what these ceilings allow, so reaching it means a program that is not answering |
 | one line read from an adapter | 1 MiB | what is held at once, never what may be said. Past it with no newline, the run is discarded |
 | a message body written down | 64 KiB | a stranger's text arriving on somebody else's schedule. Clipped, not refused |
 | attachments taken from one message | 10 | an agent's directory is not somewhere a stranger gets to fill |
@@ -856,13 +1034,28 @@ Said plainly, because a page that quietly omitted this would be one somebody wri
 cannot explain.
 
 **Most of what `--capabilities` says is asked for and thrown away.** It is printed once, by
-`channels add`, and there is no column in the `channels` table holding it. Two fields are read, and
-they are read from different places.
+`channels add`, and there is no column in the `channels` table holding it. Three fields are read, and
+they are read from three different places.
+
+`search` is asked of `--capabilities` **once per search**, immediately before the search itself, and
+decides whether the search happens at all. Nothing is kept, which is deliberate rather than pending: a
+stored answer is one that goes on being true after an adapter is replaced by an update, and the whole
+value of asking is that it is asked of the program actually on disk. It costs one bounded offline
+process with no credential in it, which is also what makes it the honest way to tell an adapter that
+does not offer search from one that offers it and broke.
 
 `max_text` comes out of the channel's `settings`, where a `--check` may put it — so an adapter that
 reports one there is split to it and one that does not gets a flat 2000. Declare your real limit
 anyway, and go on checking the text you are handed, because that check is what catches the day the
 two disagree.
+
+`address` is asked of `--capabilities` itself, at the moment somebody points a schedule at a
+destination on your channel, and **decides whether that destination may be written down**. It is a
+gate at write time and not a promise about delivery: rundesk asks it once, before anything is
+stored, so a channel whose adapter cannot resolve a destination refuses `--to` where it was typed
+rather than at two in the morning. What the adapter does with a `to` it later receives is still the
+adapter's — a destination it cannot reach then is answered `failed`, and nothing re-asks the
+capability or re-checks the allow list on the way.
 
 <a id="stream-decides-how-an-answer-is-composed"></a>
 `stream` is asked of `--capabilities` itself, once per gateway, and **decides how an answer is

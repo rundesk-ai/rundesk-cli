@@ -44,7 +44,9 @@ footer under the answer. A turn looks like this and nothing else:
 A turn that was stopped, or that failed, takes the 👀 down and puts nothing up. The sentence the
 agent delivers is the news.
 
-**It can name one person and it cannot address a room.** An answer that names a Slack member —
+**It can name one person and it cannot address a room.** The agent is told, beside the name of
+whoever spoke, the exact handle that mentions them — only for mentioning them, never to repeat —
+so it can mention the person it is answering. An answer that names a Slack member —
 `<@U01ABCDEF2G>`, the markup Slack itself uses — arrives as a real mention, so an agent asked to
 loop somebody in can do it. Everything wider stays the text it looks like: `@channel`, `@here`,
 `@everyone`, a user group, a channel link, and anything malformed, because notifying a room full of
@@ -52,13 +54,18 @@ people on the agent's behalf is not something anybody asked for. A private answe
 command is escaped whole — those words are Rundesk's account of stored records rather than the
 agent's own sentence.
 
-**It sends files out and takes none in.** A file the agent attached to its answer is uploaded into
-the same conversation the answer went to — see [files it sends](#files-it-sends). Nothing incoming is
-fetched: a file somebody uploads to the agent is not read, and no scope that would read one is asked
-for.
+**It sends files out, and takes one in only when the agent goes and asks for it.** A file the agent
+attached to its answer is uploaded into the same conversation the answer went to — see
+[files it sends](#files-it-sends). Nothing arriving is fetched: a file somebody uploads to the agent
+is still not read. The one way a file comes in is `rundesk search <agent> --fetch`, which brings in
+the attachments of a message the agent found and asked for by name — see
+[what it can search](#what-it-can-search).
 
 **It offers one slash command**, named after the agent, and every one of its answers is private to
 whoever typed it — see [the one command it offers](#the-one-command-it-offers).
+
+**The agent can go and look through this workspace on its own** — but only where this bot was
+invited, and only when it asks. See [what it can search](#what-it-can-search).
 
 ## 1. Create the app from the manifest
 
@@ -132,12 +139,26 @@ oauth_config:
       - reactions:write
       # Saying who spoke, in the words Slack shows rather than as an id the brain cannot read.
       - users:read
-      # Uploading a file the agent attached to its answer. There is deliberately no `files:read`:
-      # nothing incoming is fetched, so nothing asks to read one.
+      # Uploading a file the agent attached to its answer.
       - files:write
       # Declaring the one slash command above. It reads nothing and grants no access to a
       # conversation; without it the command cannot be declared at all.
       - commands
+      # The last four are for `rundesk search`, and every one of them is optional. Leave them out
+      # and everything else on this page works exactly as it does today — the agent simply searches
+      # fewer kinds of conversation, and says so when it does. Read
+      # `## What it can search` below before you decide. None of them widens what the bot may see:
+      # each one covers a conversation the bot is already in.
+      #
+      # Listing the direct and group-direct conversations this bot is in, so an unscoped search can
+      # find them. Without these two, a search still reads a direct conversation you name outright.
+      - im:read
+      - mpim:read
+      # Reading what was said in a group direct conversation it is in.
+      - mpim:history
+      # Downloading a file somebody attached to a message the agent found. Without it, `search` works
+      # and `--fetch` refuses by name.
+      - files:read
 
 settings:
   event_subscriptions:
@@ -156,6 +177,11 @@ settings:
 **No `search:read`, no `users:read.email`, and nothing that reads a channel the bot was not invited
 to.** The bot sees direct messages sent to its own App Home and the channels somebody added it to.
 It does not inherit the installer's messages or their view of the workspace.
+
+**The four search scopes do not change that sentence, which is why they are safe to add.** Each one
+covers a conversation the bot is already in — listing the direct conversations it is part of, reading
+a group direct conversation it is part of, downloading a file from a message it can already read.
+None of them reaches a channel it was not invited to, and none of them is a user token.
 
 ## 2. Declare the app as an agent
 
@@ -347,6 +373,83 @@ large file on a slow link is the case this costs.
 not have it: `rundesk channels doctor <agent>` names it, and the fix is
 [step 3](#3-install-the-app-to-the-workspace) — **Reinstall to Workspace**, because a scope added
 after a token was issued does not reach it.
+
+## What it can search
+
+`rundesk search` lets the agent go and look through this workspace mid-turn, read what it found,
+narrow the question and ask again. It is the same verb on every platform — see
+[the command](../api/conversations.md#search) — and this section is only what *Slack* does behind it.
+
+```console
+$ rundesk search ava "the invoice bug" --since 2026-08-01
+2 found on slack, holding 'the invoice bug', since 2026-08-01  (9 places, 1600 messages looked through)
+WHEN                  WHO   WHERE                  FILES  REF                      SAID
+2026-08-30T14:02:11Z  Dana  the #operations room   1      C0OPS/1725026531.000200  the invoice bug is in the parser
+2026-08-29T09:40:02Z  Sam   a direct message              D0SAM/1724924402.000100  re: the invoice bug — fixed?
+```
+
+### Where it looks, and where it cannot
+
+**Only where this bot already is.** Slack publishes no search a bot token can call on its own, so the
+adapter reads the conversations it is a member of and matches the words itself. That means:
+
+| | |
+|---|---|
+| channels it was invited to | **yes**, public and private alike |
+| threads inside those channels | **yes** — and this matters, because the agent answers every channel mention in a thread of its own |
+| direct messages with the bot | **yes** |
+| group direct messages it is in | **yes**, with `mpim:history` |
+| channels it was never invited to | **no** |
+| your own direct messages with other people | **no** |
+
+**Said plainly, because it is the first thing people expect and do not get:** this searches what the
+*bot* can see, not what *you* can see. Reaching a conversation the bot is not in would need a Slack
+*user* token — one person's whole view of the workspace, including every private message they can
+read — and no Rundesk agent is ever given one. The adapter refuses a `xoxp-` token by name.
+
+**It matches words, not meaning.** Every word you type has to appear, ignoring case. There is no
+stemming, no phrase, and no ranking, because Slack's own ranked search is not available to a bot
+token here. Narrow with `--place`, `--from` and a window of days rather than with cleverer words.
+
+### What it says when it could not look everywhere
+
+**A search that stopped early always says so**, and it is never printed as an empty result. Reading
+one as the other is how an agent concludes a thing was never discussed.
+
+| You will see it say | Because |
+|---|---|
+| it used a default window of the last 30 days | you gave no `--since`, and it will not read all of history by default |
+| direct or group-direct messages were not looked through | the app has not been granted `im:read`, `mpim:read` or `mpim:history`. The sentence names the one that is missing |
+| it stopped after so many places, or so many pages | the search reached its own ceiling. Narrow it with `--place` or a shorter window |
+| more conversations held threads than it opened | a thread is a second call to Slack, so a busy channel is bounded. Narrow with `--place` |
+| Slack rate-limited it | it stops rather than waiting. A turn is running and you have not been answered yet |
+
+**A conversation you name outright is always read**, even when the app cannot *list* that kind.
+Listing and reading are two different scopes: without `im:read` an unscoped search finds no direct
+messages, and `rundesk search ava invoice --place D0SAM` still reads that one.
+
+### Bringing a file in
+
+A result's `REF` is what `--fetch` takes:
+
+```console
+$ rundesk search ava --fetch 'C0OPS/1725026531.000200' --channel slack
+2 from C0OPS/1725026531.000200, in ava's slack record
+```
+
+This needs `files:read`. Without it, searching works and `--fetch` refuses by name, saying which
+scope to add. Up to ten files of 32 MiB each; the message is reached again before anything is
+downloaded, and a file whose size does not match what Slack declared is refused while the rest still
+come.
+
+### One assumption worth knowing
+
+**This assumes your app is internal to your workspace and is not publicly distributed.** Slack cut
+`conversations.history` for non-Marketplace *distributed* apps to one request a minute returning
+fifteen messages, and exempted apps a customer built for their own workspace — which is what the
+manifest on this page creates. Switch distribution on for this app and search degrades sharply, from
+hundreds of messages a second to fifteen a minute. Nothing here detects that; it will simply become
+slow and say it stopped early.
 
 ## The one command it offers
 

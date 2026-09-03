@@ -101,6 +101,7 @@ is one pinned package with no dependency behind it.
 
 from __future__ import annotations
 
+import calendar
 import contextlib
 import errno
 import fcntl
@@ -118,6 +119,8 @@ import time
 import traceback
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 #: The vendor library, bound by `the_library()` at the moment it is first needed.
 #:
@@ -144,15 +147,25 @@ MAX_TEXT = 3800
 #: `react` and `thread` are real: a turn is marked on the message that asked for it, and a mention in
 #: a channel is answered in a thread of its own.
 #:
-#: `attach` is `True` for one direction and that is what the word means here: a file the agent
-#: declared in its answer is verified again and uploaded into the exact conversation the answer went
-#: to (R-SLK-47). **Nothing is fetched *in*** — no `files:read` is asked for and an incoming file is
-#: not taken — and rundesk keeps none of this answer anyway, so the honest reading is the one a
-#: person gets from the `can` line beside a channel: this surface can put a file where the answer is.
+#: `attach` is `True` for the direction a turn's answer travels: a file the agent declared is
+#: verified again and uploaded into the exact conversation the answer went to (R-SLK-47). **A file
+#: comes the other way only when it is asked for by name** — `fetch` brings in the attachments of
+#: one message a search found, and nothing takes a file off a message that merely arrived.
+#:
+#: `search` is `True` because this really looks, and it is the one key rundesk acts on: it is read
+#: offline and with no credential, and a channel that does not say `True` here is never asked to
+#: search at all. **Honest about how it looks**: Slack publishes no search a bot token may call, so
+#: what stands behind this key is enumerating the conversations this bot was invited to and reading
+#: their history — bounded, and saying in `partial` wherever it stopped.
 #:
 #: `max_text` is the constant above and never a second copy of it.
+#: **`address` is what lets a schedule report somewhere of its own.** rundesk holds no Slack
+#: credential, so it cannot turn a user id into the direct conversation that user reads — that is
+#: `conversations.open`, a call only this side can make — and the string this adapter composes for a
+#: place is its own and never rundesk's to build. Saying so is what allows rundesk to accept `--to`
+#: for this channel; an adapter that says nothing has `--to` refused where somebody typed it.
 CAPABILITIES = {"stream": False, "edit": "none", "react": True, "thread": True, "attach": True,
-                "max_text": MAX_TEXT}
+                "address": True, "search": True, "max_text": MAX_TEXT}
 
 #: Where the two credentials are read from. Slack needs both and one without the other reaches
 #: nothing: the app-level token opens the socket, the bot token calls the Web API. **Never an
@@ -172,10 +185,15 @@ BOT_TOKEN_STARTS = "xoxb-"
 APP_TOKEN_STARTS = "xapp-"
 USER_TOKEN_STARTS = "xoxp-"
 
-#: The bot scopes this actually uses, each against something in this file. **Short on purpose**: a
-#: scope granted for nothing is a scope somebody was asked for under false pretences. There is no
-#: `search:read`, no `users:read.email`, and nothing that would let this read a channel it has not
-#: been invited to.
+#: The bot scopes **`--check` refuses over**, each against something in this file. **Short on
+#: purpose**: a scope granted for nothing is a scope somebody was asked for under false pretences.
+#: There is no `search:read`, no `users:read.email`, and nothing that would let this read a channel
+#: it has not been invited to.
+#:
+#: **This set is what makes a channel unreachable, so nothing new goes in it.** The four scopes
+#: `search` and `fetch` want are in `FURTHER_SCOPES` and are read at runtime instead — adding one
+#: here would take every already-connected Slack channel off the air the moment an install updated,
+#: until its owner reinstalled the app. See `FURTHER_SCOPES`, which says how each is degraded.
 WANTED_SCOPES = {
     "app_mentions:read": "being named in a channel",
     "chat:write": "answering, and setting the agent session's status while a turn runs",
@@ -536,6 +554,147 @@ CALL_WITHIN = 30
 READS_MOST = 4 * 1024 * 1024
 READ_BLOCK = 64 * 1024
 
+#: How long the whole of one `search` may take, and how long one Web API call inside it may block.
+#:
+#: **Well under what rundesk allows**, which is sixty seconds in `channels.adapters.SEARCH_WITHIN`.
+#: An agent asks this in the middle of a turn and asks again once it has read the answer, so a
+#: search cut off by rundesk's ceiling answers nothing at all — while one that stops itself answers
+#: with what it found and a sentence saying where it stopped. The budget exists so the second
+#: outcome is the one that happens.
+#:
+#: **Nothing here waits, sleeps or retries.** A rate limit ends the search and becomes a line in
+#: `partial`: the pause Slack asks for is routinely longer than this whole budget, so a bounded
+#: program that waited it out would be killed rather than answer.
+LOOKING_WITHIN = 25.0
+A_LOOK_WITHIN = 10
+
+#: How far back a search reaches when nobody said, and the day it counts in.
+#:
+#: **Never all of history.** A bot party to sixty conversations holds more of it than any bounded
+#: program can read, and a search that quietly read a month of it would answer *nothing was said*
+#: about a year nobody looked at. So the window that was really used is always stated in `partial`
+#: when it was this one — an agent has to know it did not search all of history.
+LOOKED_BACK_DAYS = 30
+A_DAY = 86400
+
+#: How many places one search will look in, and how many pages of history it reads in each.
+#:
+#: **Both are ceilings on somebody else's platform, and reaching either is said out loud.**
+#: `PLACES_MOST` bounds the enumeration and the walk together; `PAGES_MOST` pages of `HISTORY_PAGE`
+#: is eight hundred messages of one conversation, which is more than thirty days holds in all but
+#: the busiest. A place that was not looked in is not a place where nothing was said, so neither of
+#: these is ever reached in silence.
+PLACES_MOST = 60
+PAGES_MOST = 4
+
+#: What one page asks Slack for. **Under Slack's own 999 on purpose**: its own reference asks for
+#: no more than two hundred on `conversations.history`, and a page is read once, so its size buys
+#: nothing but latency.
+HISTORY_PAGE = 200
+PLACES_PAGE = 200
+PLACES_PAGES = 5
+
+#: How many results one search answers with when rundesk said nothing, how many it will ever answer
+#: with, and how much of the words asked for are read. All three agree with the numbers rundesk
+#: applies on its own side — `RESULTS_AT_MOST`, `RESULTS_CEILING` and `WORDS_AT_MOST` — and are held
+#: here so that a request which arrived without them, or past them, is still bounded.
+RESULTS_UNSAID = 20
+RESULTS_MOST = 100
+WORDS_MOST = 400
+
+#: How much of a found message travels. Clipped here as well as on rundesk's side, because a hundred
+#: results is the largest thing this adapter ever prints.
+FOUND_TEXT = 1000
+
+#: The four kinds of conversation this bot can be party to: Slack's own word for each in
+#: `users.conversations`, the scope that permits *listing* it, the scope that permits *reading* it,
+#: and what to call it in a sentence somebody acts on.
+#:
+#: **Listing and reading are two scopes and two failures, and this is where they are kept apart.**
+#: A place named outright in a request is read without ever being listed, so a bot holding
+#: `groups:history` and no `groups:read` still answers about the private channel it was pointed at,
+#: and says separately that it could not go looking for others.
+EVERY_KIND = (
+    ("public_channel", "channels:read", "channels:history", "Public channels"),
+    ("private_channel", "groups:read", "groups:history", "Private channels"),
+    ("mpim", "mpim:read", "mpim:history", "Group direct messages"),
+    ("im", "im:read", "im:history", "Direct messages"),
+)
+
+#: The scopes `search` and `fetch` use that `--check` deliberately does not refuse over, and what
+#: each one buys.
+#:
+#: **Never added to `WANTED_SCOPES`, and that is a decision recorded rather than an omission.** A
+#: scope in that set is a scope `--check` refuses on, so putting these four there would make every
+#: Slack channel already connected unreachable the moment an install was updated, until its owner
+#: reinstalled the app — a broken install, for a capability nobody had asked for yet.
+#:
+#: Read at runtime instead, off Slack's own `x-oauth-scopes` header, by the same `_scopes_lacking`
+#: that builds the refusal above, and degraded honestly: a kind that cannot be listed is not looked
+#: through, and `partial` says which scope would let it be. **Never invented and never silent** — a
+#: missing scope that read as "nothing was said there" is the failure this arrangement exists to
+#: prevent.
+FURTHER_SCOPES = {
+    "im:read": "listing the direct conversations this bot is in",
+    "mpim:read": "listing the group direct conversations it is in",
+    "mpim:history": "reading what was said in a group direct conversation",
+    "files:read": "downloading a file somebody attached to a message that was found",
+}
+
+#: What a scope that was not granted is said as, in `partial` and in a refusal.
+#:
+#: **The sentence names the scope and the reinstall together**, because a scope added in an app's
+#: settings does not reach a token that was issued before it: an owner who adds one, sees no change
+#: and concludes the capability does not work is the whole of what this wording prevents.
+WITHOUT_SCOPE = ("{what} were not looked through: this app has not been granted {scope}. Add it "
+                 "under OAuth & Permissions and reinstall the app to the workspace.")
+WITHOUT_FILES = ("this app has not been granted files:read, so it cannot download a file somebody "
+                 "attached. Add it under OAuth & Permissions and reinstall the app to the "
+                 "workspace.")
+
+#: How a message that was found is named again so `fetch` can reach exactly it, and the ceiling
+#: rundesk carries one under. **Slack's own two ids and nothing composed**: a conversation id and
+#: the `ts` inside it are together unique, and both come back out of the string unchanged.
+#: How many threads one search may open, and how many pages of one it reads. **A thread is a second
+#: call**, so this is what keeps a search over a busy channel from becoming a hundred of them; when
+#: it bites, `partial` says so rather than letting the answer read as though it looked everywhere.
+THREADS_MOST = 40
+THREAD_PAGE = 200
+
+REF_IN = "/"
+REF_MOST = 64
+
+#: Where a fetched file is staged: inside `RUNDESK_CHANNEL_HOME`, under the message it came from,
+#: named by its position and never by anything the platform said. **The same convention the arriving
+#: path already uses**, so a file a search brought in lands exactly where one that arrived on its
+#: own does — and a filename is a stranger's text, flattened once, on rundesk's side, by the code
+#: that also has to make the name an unused one.
+FETCHED_IN = "fetched"
+
+#: What one message may bring in, and how big one of those may be. **The same two numbers the
+#: Discord adapter holds**, and they agree because the reason is the same one and is not this
+#: platform's: rundesk enforces its own bound in `channels.files`, and these exist so that no
+#: adapter spends somebody's bandwidth and somebody's disk on files that are going to be refused a
+#: moment later. Two adapters disagreeing here would be a difference in what an agent can bring in
+#: that nobody chose.
+BROUGHT_MOST = 10
+BROUGHT_BYTES = 32 * 1024 * 1024
+
+#: How long one download may block on a single socket operation. **A socket ceiling and never a
+#: ceiling on the transfer**: thirty-two megabytes arriving steadily never trips it, and what it
+#: really bounds is how long a stalled connection can hold this program up.
+A_DOWNLOAD_WITHIN = 30
+
+#: Where a file may be fetched from. **The one value out of Slack's JSON this used without checking,
+#: and the two things that made that matter on this interpreter.** `urlopen` honours `file:`, `ftp:`
+#: and `data:`, so a file object carrying a non-`https` `url_private` would have had something off
+#: this machine copied into the staged directory and handed to the agent as an attachment. And
+#: `urllib`'s redirect handler copies every header it was given onto the redirected request, so the
+#: bot token would have followed a redirect to whatever host the link named. Checked here, where the
+#: link is still a string, rather than trusted because of who sent it.
+FETCHED_FROM = ("slack.com", "slack-edge.com", "slack-files.com", "slack-msgs.com")
+FETCHED_OVER = "https"
+
 #: What Slack answers when nothing about this connection will ever come right. Ten thousand refused
 #: sign-ins is a rate limit on the machine's own address, so these end the program loudly rather than
 #: reconnecting into one.
@@ -751,6 +910,18 @@ def escaped_keeping_mentions(said: str) -> str:
     return "".join(kept)
 
 
+def a_handle_for(user: str) -> str:
+    """The exact markup that mentions this member, or `""` where the id is not one (R-SLK-65).
+
+    **The same token `escaped_keeping_mentions` keeps, checked by the same rule.** What arrives
+    beside a speaker's name is what the brain will write back to mention them, so it has to be a
+    token the answer path lets through as a mention — `A_MENTION` decides both, and a handle this
+    would escape on the way out is one that must not be taught on the way in.
+    """
+    said = f"<@{user}>" if user else ""
+    return said if said and A_MENTION.fullmatch(said) else ""
+
+
 def conversation_of(team: str, channel: str, thread: str = "") -> str:
     """The one string rundesk keeps this exchange under.
 
@@ -774,6 +945,72 @@ def where_of(place: Any) -> Tuple[str, str, str]:
     if len(parts) > 3:
         raise Refused(f"{place!r} has more pieces in it than a Slack conversation has")
     return parts[0], parts[1], parts[2] if len(parts) == 3 else ""
+
+
+def written_by_us(one: Dict[str, Any], ours: str, our_bot: str) -> bool:
+    """Whether this app wrote this message. Both ids are asked, and an unknown one matches nothing.
+
+    **One rule, because there are two callers and they must not disagree.** A thread read for
+    context and a search reading a month of history are the same question — *did we write this?* —
+    and an answer that differed between them would let an agent quote itself back in one of them.
+
+    `our_bot` is empty only where `auth.test` gave no `bot_id`, which is a token `--check` refuses.
+    An empty one must never match a message that carries none, or every ordinary person's line
+    would read as ours.
+    """
+    wrote = str(one.get("bot_id") or "")
+    who = str(one.get("user") or "")
+    return bool(our_bot and wrote == our_bot) or bool(ours and who == ours)
+
+
+def named_in(one: Dict[str, Any]) -> str:
+    """What to call a peer app out of the message it wrote, asking Slack nothing.
+
+    `users.info` knows nothing about a bot, so asking would spend a call to learn nothing. What
+    Slack already hands over is the app's own profile name, then the name it posted under, then its
+    bot id — and each of those was chosen by whoever installed that app, so it is a stranger's text
+    and is flattened and clipped exactly as a display name is.
+    """
+    profile = one.get("bot_profile")
+    named = (profile.get("name") if isinstance(profile, dict) else None) or \
+        one.get("username") or one.get("bot_id")
+    return flat(named)
+
+
+def named_as(profile: Dict[str, Any], who: str) -> str:
+    """One `users.info` answer as the label to show, in the order Slack's own surfaces prefer.
+
+    Their id where it will say none, which is a whole answer: **it reaches a prompt and never a
+    decision** — who may be answered is settled against the member id, which nobody can choose.
+    """
+    return flat((profile.get("profile") or {}).get("display_name")
+                or profile.get("real_name") or profile.get("name") or who)
+
+
+def a_room_from(said: Dict[str, Any]) -> Tuple[str, bool, bool]:
+    """One `conversations.info` answer as the name, whether it is private, and whether it is read
+    by people outside this workspace. One reading, so two callers cannot describe one room two ways.
+    """
+    return (flat(said.get("name"), WHERE_AT_MOST), bool(said.get("is_private")),
+            bool(said.get("is_ext_shared")))
+
+
+def _aimed_at(said: Any) -> Optional[Tuple[str, str]]:
+    """The one destination a delivery names, as `("sender"|"place", id)`, or `None` for none.
+
+    **Read whole rather than guessed at.** `to` supersedes `place` entirely, so a malformed one must
+    never fall through to the place beside it — that place is the channel's own recorded destination
+    and delivering there is the mis-delivery rundesk aimed this away from.
+    """
+    if said is None:
+        return None
+    if not isinstance(said, dict):
+        raise Refused("the destination to deliver to was not an object")
+    for kind in ("sender", "place"):
+        named = str(said.get(kind) or "")
+        if named:
+            return kind, named
+    raise Refused("the destination to deliver to named neither a sender nor a place")
 
 
 def a_direct_message(event: Dict[str, Any]) -> bool:
@@ -1416,21 +1653,26 @@ def _token_trouble(bot: str, app: str) -> str:
     return ""
 
 
-def _scopes_lacking(who: Any) -> List[str]:
-    """Which of the scopes this uses the token was not granted, read off Slack's own header.
+def _scopes_lacking(who: Any, wanted: Any = WANTED_SCOPES) -> List[str]:
+    """Which of the scopes asked about the token was not granted, read off Slack's own header.
 
     **Empty when the header is not there**, which is not the same as everything being granted: it is
     everything this can *establish*, and refusing a connection over a header that could not be read
     would turn a working setup into one nobody can explain. Where it is there, this is the one place
     an owner is told before three in the morning — a scope added in an app's settings does not reach
     a token that was issued before it, and the symptom is one call refusing for ever.
+
+    **One reader for two questions, because there is one header.** `--check` asks about
+    `WANTED_SCOPES` and refuses on what is missing; `search` and `fetch` ask about `FURTHER_SCOPES`
+    and degrade on it. A second way to read the same header is a second way to be wrong about it,
+    and the two would eventually disagree about the same token.
     """
     headers = getattr(who, "headers", None) or {}
     granted = str(headers.get("x-oauth-scopes") or headers.get("X-OAuth-Scopes") or "")
     if not granted.strip():
         return []
     held = {one.strip() for one in granted.split(",") if one.strip()}
-    return [one for one in WANTED_SCOPES if one not in held]
+    return [one for one in wanted if one not in held]
 
 
 def _where_it_writes(web: Any, team: str, senders: List[str], places: List[str]) -> str:
@@ -1525,6 +1767,839 @@ def _refused(why: str, secret: bool = False) -> int:
 
 
 # ---------------------------------------------------------------------------------------------
+# Question four: look through what this bot was invited to, and say how far you got.
+# ---------------------------------------------------------------------------------------------
+
+
+class Asked(NamedTuple):
+    """One search request as rundesk writes it, with nothing left for this file to guess at.
+
+    **Every field is always on the wire and `""` means unscoped.** A scope has no third meaning —
+    an absent place and an empty place both mean *everywhere this bot can reach* — so nothing here
+    has to decide what a missing key would have meant.
+    """
+
+    #: What to look for. Every word of it has to be in a message, in any order and ignoring case.
+    words: str
+    #: One Slack conversation id, or `""` for every place this bot is party to.
+    place: str
+    #: One Slack member id, or `""` for anybody.
+    user: str
+    #: The inclusive first and last day, `YYYY-MM-DD` in UTC, or `""` for unbounded.
+    since: str
+    until: str
+    #: How many results to answer with.
+    most: int
+
+
+def search() -> int:
+    """Look through what this bot was invited to, and be exact about how far that got.
+
+    **Slack publishes no search this may call, so this one is fetch and filter.**
+    `assistant.search.context` needs an `action_token` minted by an inbound message event, which a
+    bounded program started afterwards does not have and cannot obtain; `search.messages` is
+    user-token-only, and a user token is the one thing this adapter refuses by name. So what stands
+    behind the `search` capability is `users.conversations` and `conversations.history`, bounded by
+    a budget of this program's own and honest about where it stopped.
+
+    **Four outcomes, and none of them may be read as another.** *Found* is `ok` with results and an
+    empty `partial`; *found nothing* is `ok`, no results and an empty `partial`, and it means the
+    search really did look everywhere it was asked to; *looked as far as it could* is `ok` with a
+    `partial` sentence, with or without results; *could not look* is `ok: false` and a `why`. The
+    third is the one that costs the most to get wrong: an agent reading a spent budget as an
+    absence of conversation concludes a thing was never discussed, which is the single worst answer
+    this capability can give.
+
+    **`ok: false` still exits `0`**, exactly as `--check` does. What is read is the object, not the
+    code: a program that printed `ok: false` refused, and one that died without printing anything
+    failed.
+    """
+    missing = the_library()
+    if missing:
+        return _refused(missing)
+    bot, _app = the_tokens()
+    if not bot:
+        return _refused(f"there is no bot token — nothing set {BOT_TOKEN_FROM}. A search reaches "
+                        f"Slack with the same credential this channel connects with, so there is "
+                        f"nothing here to look with")
+    try:
+        asked = _asked(_one_request())
+    except Refused as why:
+        return _refused(str(why))
+    # **Its own ceiling, the way `check` builds one.** `CALL_WITHIN` is right for a call nobody is
+    # waiting behind; a call inside a budget this program has to answer within cannot be allowed to
+    # spend the whole of it.
+    web = WebClient(token=bot, timeout=A_LOOK_WITHIN)
+    try:
+        who = web.auth_test()
+    except Exception as why:               # noqa: BLE001 — a platform boundary, and the diagnosis
+        return _refused(_why_slack_refused(why))
+    try:
+        return Looking(web, who, asked).run()
+    except Refused as why:
+        return _refused(str(why))
+
+
+class Looking:
+    """One search: what it may reach, what it has spent, and what it actually examined.
+
+    Held together rather than passed along because a search is one budget, two name caches and a
+    handful of counters, and every step of it needs all of them. Nothing here outlives the one
+    invocation, so the caches are asked of Slack once per id and never bounded further.
+    """
+
+    def __init__(self, web: Any, who: Any, asked: Asked) -> None:
+        self.web = web
+        self.asked = asked
+        #: The two ids Slack gives this app for itself, from `auth.test` and never inferred. Both,
+        #: because a message this bot posted carries the first and may carry the second.
+        self.ours = str(who.get("user_id") or "")
+        self.our_bot = str(who.get("bot_id") or "")
+        #: Which of the four further scopes this token demonstrably lacks. **Empty where Slack's
+        #: header could not be read**, which is everything this can establish rather than a claim
+        #: that everything was granted — so a call is attempted and its own refusal is what becomes
+        #: a sentence, rather than a scope being invented either way.
+        self.lacking = set(_scopes_lacking(who, FURTHER_SCOPES))
+        #: The monotonic moment this stops looking, whatever it has by then.
+        self.deadline = time.monotonic() + LOOKING_WITHIN
+        self.people: Dict[str, str] = {}
+        self.rooms: Dict[str, Tuple[str, bool, bool]] = {}
+        #: What was really examined. **`measured` is the difference between said-zero and
+        #: said-nothing**: a search that never established a list of places to walk reports no
+        #: `looked` at all, because rundesk reads an absent count as *did not say* and a zero as
+        #: *looked nowhere*, and those are two different answers.
+        self.measured = False
+        self.places_looked = 0
+        self.messages_looked = 0
+        #: How many threads have been opened, and whether that ceiling stopped any being opened.
+        self.threads_read = 0
+        self.crowded_threads = False
+        #: Why it stopped, each held as a flag and turned into a sentence once, in `_partial`, so
+        #: that the order an agent reads them in is decided in one place.
+        self.ran_out = False
+        self.places_left = 0
+        self.limited = False
+        self.filled = False
+        self.deep = 0
+        self.crowded = False
+        self.unlisted: List[str] = []
+        self.cannot_list = ""
+        self.unread = 0
+        self.why_unread = ""
+        self.window_said = ""
+        #: Set by anything that ends the walk where it stands: the budget, or a rate limit.
+        self.stop_now = False
+
+    # -- the whole of one search -----------------------------------------------------------
+
+    def run(self) -> int:
+        """Walk what may be walked, then answer once with what was found and where it stopped."""
+        begins, ends = self._window()
+        places = self._places()
+        found: List[Dict[str, Any]] = []
+        left = list(places or [])
+        while left:
+            if self._spent():
+                self.ran_out, self.places_left = True, len(left)
+                break
+            if len(found) >= self.asked.most:
+                self.filled, self.places_left = True, len(left)
+                break
+            found.extend(self._through(left.pop(0), begins, ends))
+            if self.stop_now:
+                self.places_left = len(left)
+                break
+        # Newest first across every place at once, and only then cut. A result is worth more for
+        # being recent, and cutting per place would answer with the newest of the first place
+        # rather than the newest of the search.
+        found.sort(key=lambda one: _as_a_number(str(one.get("ts") or "")), reverse=True)
+        said: Dict[str, Any] = {"ok": True,
+                                "results": [self._a_result(one) for one in found[:self.asked.most]],
+                                "partial": self._partial()}
+        if self.measured:
+            said["looked"] = {"places": self.places_looked, "messages": self.messages_looked}
+        say(said)
+        return 0
+
+    def _spent(self) -> bool:
+        """Whether the budget is gone. **Measured on the monotonic clock**, so the machine's wall
+        clock moving — a daylight change, an NTP correction — can neither cut a search short nor
+        strand one."""
+        return time.monotonic() >= self.deadline
+
+    # -- the days it covers ----------------------------------------------------------------
+
+    def _window(self) -> Tuple[float, float]:
+        """The first second the search covers and the first second past it, both in UTC.
+
+        **Slack is handed these as a hint and this side does the filtering.** `oldest` and `latest`
+        are exclusive on `conversations.history`, so a bound handed over exactly would drop a
+        message standing on the boundary; a second of slack on the way out and an exact comparison
+        on the way back gets the inclusive days that were asked for.
+
+        **A defaulted window is always stated in `partial`.** An agent that was not told the search
+        covered thirty days reads *nothing was found* as *nothing was ever said*, and there is no
+        way for it to find out otherwise.
+        """
+        ends = (_midnight(self.asked.until) + A_DAY) if self.asked.until else time.time()
+        if self.asked.since:
+            return _midnight(self.asked.since), ends
+        begins = ends - LOOKED_BACK_DAYS * A_DAY
+        self.window_said = (f"Nothing said how far back to look, so this searched the "
+                            f"{LOOKED_BACK_DAYS} days ending {_a_day(ends - 1)} (UTC) and no "
+                            f"further.")
+        return begins, ends
+
+    # -- where it looks --------------------------------------------------------------------
+
+    def _places(self) -> Optional[List[str]]:
+        """Every conversation this search will walk, or `None` where it could not establish one.
+
+        **A place named outright is read and never listed.** Enumeration and reading are two scopes
+        and two failures: a bot holding `groups:history` and no `groups:read` can read the private
+        channel it was pointed at perfectly well, and refusing that because it cannot go looking for
+        others would be one failure standing in for another.
+
+        `None` rather than `[]` where nothing could be listed at all, because those are two answers:
+        an empty list is *this bot is party to nothing*, which is a measurement, and `None` is *this
+        never established what it was party to*, which is not one.
+        """
+        if self.asked.place:
+            # One place named outright is a reach this search established, so what it examines is
+            # measured — `looked` is left out only where no list of places was ever arrived at.
+            self.measured = True
+            return [self.asked.place]
+        kinds = []
+        for kind, listing, reading, called in EVERY_KIND:
+            missing = listing if listing in self.lacking else (
+                reading if reading in self.lacking else "")
+            if missing:
+                self.unlisted.append(WITHOUT_SCOPE.format(what=called, scope=missing))
+                continue
+            kinds.append(kind)
+        if not kinds:
+            return None
+        found: List[str] = []
+        listed = False
+        cursor = ""
+        for _ in range(PLACES_PAGES):
+            if self._spent():
+                self.ran_out = True
+                break
+            asking: Dict[str, Any] = {"types": ",".join(kinds), "limit": PLACES_PAGE,
+                                      "exclude_archived": True}
+            if cursor:
+                asking["cursor"] = cursor
+            try:
+                answered = self.web.users_conversations(**asking)
+            except Exception as why:       # noqa: BLE001 — a platform boundary
+                if not self._rate_limited(why):
+                    self.cannot_list = _why_slack_refused(why)
+                break
+            listed = True
+            for one in (answered.get("channels") or []):
+                if isinstance(one, dict) and one.get("id"):
+                    found.append(str(one["id"]))
+            cursor = str((answered.get("response_metadata") or {}).get("next_cursor") or "")
+            if not cursor or len(found) >= PLACES_MOST:
+                break
+        # **A cursor still in hand is more conversations, however few came back.** Slack's own
+        # pagination warns that a page may hold fewer items than the limit and still carry a
+        # `next_cursor` — routine with `exclude_archived` — so testing the *count* against the
+        # ceiling missed the case where the pages ran out first: twenty-five of an unknown number
+        # walked, and an answer that read `found nothing, and I looked everywhere`.
+        if len(found) > PLACES_MOST or cursor:
+            self.crowded = True
+            found = found[:PLACES_MOST]
+        if not listed:
+            return None
+        self.measured = True
+        return found
+
+    # -- what was said in one of them ------------------------------------------------------
+
+    def _through(self, place: str, begins: float, ends: float) -> List[Dict[str, Any]]:
+        """One conversation, read newest first, for as many pages as the ceilings allow.
+
+        A conversation that will not be read is counted and reported once at the end rather than
+        named: a channel id in a sentence an agent reads is one more stranger's identifier crossing
+        a seam for nothing, and the fact that matters is that somewhere was not looked at.
+        """
+        here: List[Dict[str, Any]] = []
+        cursor = ""
+        for page in range(PAGES_MOST):
+            if self._spent():
+                self.ran_out = self.stop_now = True
+                return here
+            if not page:
+                # **Counted once the request is about to be made, and never on the way in.** The
+                # caller checks the budget too, and time passes between its check and this one — so
+                # counting there reported a conversation this then never asked about as one it had
+                # looked through. A place that refuses is still counted, because it was asked and it
+                # answered; one that was never asked is not.
+                self.places_looked += 1
+            asking: Dict[str, Any] = {"channel": place, "limit": HISTORY_PAGE,
+                                      "oldest": "{0:.6f}".format(max(0.0, begins - 1)),
+                                      "latest": "{0:.6f}".format(ends)}
+            if cursor:
+                asking["cursor"] = cursor
+            try:
+                answered = self.web.conversations_history(**asking)
+            except Exception as why:       # noqa: BLE001 — a platform boundary
+                if self._rate_limited(why):
+                    self.stop_now = True
+                else:
+                    self.unread += 1
+                    self.why_unread = self.why_unread or _why_slack_refused(why)
+                return here
+            messages = answered.get("messages")
+            for one in (messages if isinstance(messages, list) else []):
+                if not isinstance(one, dict):
+                    continue
+                self.messages_looked += 1
+                if self._matches(one, begins, ends):
+                    here.append(dict(one, _place=place))
+                here.extend(self._replies_to(place, one, begins, ends))
+            if len(here) >= self.asked.most:
+                self.filled = True
+                return here
+            cursor = str((answered.get("response_metadata") or {}).get("next_cursor") or "")
+            if not cursor:
+                return here
+        self.deep += 1
+        return here
+
+    def _replies_to(self, place: str, parent: Dict[str, Any],
+                    begins: float, ends: float) -> List[Dict[str, Any]]:
+        """Everything said under one parent message, which `conversations.history` does not return.
+
+        **The one Slack fact this search would otherwise get silently wrong.** `conversations.history`
+        answers with parent messages only — its own reference says *"To retrieve a message from a
+        thread, check out `conversations.replies`"* — and this adapter answers **every channel
+        mention in a thread of its own**. So the conversations most likely to hold the agent's own
+        work were exactly the ones a search could not see, and it reported that as `results: []` with
+        an empty `partial`, which the contract defines as *looked everywhere you were asked to*. That
+        is the one outcome the four states exist to prevent.
+
+        **Bounded, because a thread is a second call.** A busy channel would otherwise turn one
+        search into a hundred requests. When a ceiling bites, `partial` says so; a thread that will
+        not open is counted with the conversations that could not be read, for the same reason those
+        are counted rather than named.
+        """
+        at = str(parent.get("ts") or "")
+        replies = parent.get("reply_count")
+        if not at or not isinstance(replies, int) or isinstance(replies, bool) or replies < 1:
+            return []
+        if self.threads_read >= THREADS_MOST:
+            self.crowded_threads = True
+            return []
+        if self._spent():
+            self.ran_out = self.stop_now = True
+            return []
+        self.threads_read += 1
+        try:
+            answered = self.web.conversations_replies(
+                channel=place, ts=at, limit=THREAD_PAGE,
+                oldest="{0:.6f}".format(max(0.0, begins - 1)), latest="{0:.6f}".format(ends))
+        except Exception as why:           # noqa: BLE001 — a platform boundary
+            if self._rate_limited(why):
+                self.stop_now = True
+            else:
+                self.unread += 1
+                self.why_unread = self.why_unread or _why_slack_refused(why)
+            return []
+        found: List[Dict[str, Any]] = []
+        said = answered.get("messages")
+        for one in (said if isinstance(said, list) else []):
+            # **The parent comes back with its own replies**, and counting or matching it twice
+            # would double every threaded conversation in the answer.
+            if not isinstance(one, dict) or str(one.get("ts") or "") == at:
+                continue
+            self.messages_looked += 1
+            if self._matches(one, begins, ends):
+                found.append(dict(one, _place=place))
+        return found
+
+    def _matches(self, one: Dict[str, Any], begins: float, ends: float) -> bool:
+        """Whether this message is one of the ones that were asked for.
+
+        **This app's own messages are never among them.** An agent handed its own earlier answers
+        back as evidence of what a workspace discussed is an agent citing itself, and it would do it
+        most in exactly the conversations it has been busiest in.
+        """
+        at = str(one.get("ts") or "")
+        if not at or not begins <= _as_a_number(at) < ends:
+            return False
+        if str(one.get("subtype") or "") in NOT_SAID:
+            return False
+        if written_by_us(one, self.ours, self.our_bot):
+            return False
+        if self.asked.user and str(one.get("user") or "") != self.asked.user:
+            return False
+        return _holds(str(one.get("text") or ""), self.asked.words)
+
+    # -- what one of them is answered as ---------------------------------------------------
+
+    def _a_result(self, one: Dict[str, Any]) -> Dict[str, Any]:
+        """One found message in the shape rundesk reads, with every stranger's word flattened.
+
+        **A channel's name, a display name and a message body are all somebody else's text**, and a
+        newline in any of them is how they would end our sentence and begin one of their own. Each
+        goes through `flat` before it can reach a prompt.
+        """
+        place = str(one.get("_place") or "")
+        at = str(one.get("ts") or "")
+        who = str(one.get("user") or "")
+        return {"who": who,
+                "display": named_in(one) if one.get("bot_id") else self._a_name(who),
+                "where": self._where_this_is(place),
+                "external_place": place,
+                "when": _when(at),
+                "text": flat(one.get("text"), FOUND_TEXT),
+                "link": self._a_link(place, at),
+                "ref": _a_ref(place, at),
+                "attachments": _attached(one.get("files"))}
+
+    def _a_name(self, who: str) -> str:
+        """What Slack shows this person as, asked once per id and remembered. Their id otherwise.
+
+        **Not asked once the budget is spent, and their id is a whole answer.** These run after the
+        walk has ended, once per person in the answer — up to a hundred of them at the ceiling
+        rundesk allows — and each is bounded only by one call's own timeout. Unguarded, they ran the
+        invocation past `SEARCH_WITHIN`, and what an agent then got was a program killed with
+        nothing on stdout instead of the results it had already found.
+        """
+        if not who:
+            return ""
+        if who in self.people:
+            return self.people[who]
+        if self._spent():
+            return who
+        named = who
+        try:
+            named = named_as(self.web.users_info(user=who).get("user") or {}, who)
+        except Exception:                  # noqa: BLE001 — a name, never a refusal
+            pass
+        self.people[who] = named or who
+        return self.people[who]
+
+    def _where_this_is(self, place: str) -> str:
+        """Where this was said, in one ordinary sentence that says who can read it.
+
+        A `D` is a direct conversation whatever else Slack will say about it, and the fallback for
+        a room claims the narrower audience rather than the wider one — the sentence for an
+        externally shared channel warns a brain that strangers are reading, and inventing that
+        warning from a call that did not answer would teach it to distrust the words.
+        """
+        if place.startswith("D"):
+            return "a direct message, which nobody else can read"
+        if place in self.rooms:
+            named, private, external = self.rooms[place]
+        elif self._spent():
+            # The same rule `_a_name` and `_a_link` are held to, and the same reason: this runs
+            # after the walk, and a call made past the budget is one rundesk never sees the answer
+            # to. The fallback claims the narrower audience, so nothing is invented by not asking.
+            return a_place("", place.startswith("G"), False)
+        else:
+            named, private, external = "", place.startswith("G"), False
+            try:
+                found = self.web.conversations_info(channel=place).get("channel") or {}
+                named, private, external = a_room_from(found)
+            except Exception:              # noqa: BLE001 — a name, never a refusal
+                pass
+            self.rooms[place] = (named, private, external)
+        return a_place(named, private, external)
+
+    def _a_link(self, place: str, at: str) -> str:
+        """Slack's own permalink, asked **only for the results being returned and no others**.
+
+        `""` for any refusal and for a budget already spent, and that is a whole answer rather than
+        a failure: `external_place` and `ref` are what this message is reached by again, and both
+        are always there.
+        """
+        if not place or not at or self._spent():
+            return ""
+        try:
+            return str(self.web.chat_getPermalink(
+                channel=place, message_ts=at).get("permalink") or "")
+        except Exception:                  # noqa: BLE001 — a link, never a failure
+            return ""
+
+    # -- where it stopped ------------------------------------------------------------------
+
+    def _rate_limited(self, why: Any) -> bool:
+        """Whether Slack asked us to slow down. **Never waited out, never retried.**
+
+        The pause Slack asks for is routinely longer than this whole budget, so sleeping it off
+        inside a bounded program means being killed instead of answering. It ends the search and
+        becomes a sentence, which is the outcome an agent can act on.
+        """
+        if _slack_said(why) != RATE_LIMITED:
+            return False
+        self.limited = True
+        return True
+
+    def _partial(self) -> str:
+        """Everything this search did not do, most important first, or `""` where it did it all.
+
+        **Ordered deliberately.** Rundesk flattens and clips this to one bounded line, so what
+        leads has to be the thing an agent acts on: that the search stopped before it finished
+        beats how it was bounded, which beats what window it used.
+
+        `""` here is a claim and not an absence — it says the search looked everywhere it was asked
+        to and this is the whole answer. Nothing returns it unless every one of these is false.
+        """
+        said = []
+        if self.ran_out:
+            said.append(f"This search stopped after {int(LOOKING_WITHIN)}s with "
+                        f"{self.places_left} conversations still to look in.")
+        if self.limited:
+            said.append("Slack rate-limited this search; a bounded program does not wait one out, "
+                        "so it stopped where it was.")
+        if self.filled:
+            said.append(f"This search stopped once it had the {self.asked.most} results it was "
+                        f"asked for, so there may be more.")
+        if self.deep:
+            said.append(f"{self.deep} conversations hold more than "
+                        f"{PAGES_MOST * HISTORY_PAGE} messages in that window and were read only "
+                        f"that far back.")
+        if self.crowded_threads:
+            said.append(f"More than {THREADS_MOST} threads held replies in that window and only "
+                        f"that many were opened, so some replies were not read.")
+        if self.crowded:
+            said.append(f"This bot is party to more than {PLACES_MOST} conversations and only that "
+                        f"many were looked in.")
+        if self.cannot_list:
+            said.append(f"The conversations this bot is party to could not be listed, so nothing "
+                        f"was looked through: {self.cannot_list}.")
+        if self.unread:
+            said.append(f"{self.unread} conversations could not be read: {self.why_unread}.")
+        said.extend(self.unlisted)
+        if self.window_said:
+            said.append(self.window_said)
+        return " ".join(said)
+
+
+# ---------------------------------------------------------------------------------------------
+# Question five: bring in the files on one message that was found.
+# ---------------------------------------------------------------------------------------------
+
+
+def fetch() -> int:
+    """Stage the attachments of one message a search found, inside this channel's own directory.
+
+    **A second act rather than a field on a result**, because answering a question about words by
+    downloading every file of every result is spending somebody's bandwidth on a question nobody
+    asked.
+
+    **This stages and rundesk lands.** The adapter holds the credential and rundesk holds the
+    filesystem, which is the division the arriving path already makes: this writes into
+    `RUNDESK_CHANNEL_HOME` under a name of no consequence and says where, and rundesk proves the
+    path is contained and holds the bytes Slack said it would — against the file, never against
+    what this claimed about it. **Rundesk removes what is staged**, whether it takes it or refuses
+    it, so nothing here cleans up after itself and nothing here reports a path it did not write.
+
+    **A file that will not come is a line in `partial` and never a refusal of the whole fetch.**
+    The other files are still worth having, and the one that did not come is named.
+    """
+    missing = the_library()
+    if missing:
+        return _refused(missing)
+    bot, _app = the_tokens()
+    if not bot:
+        return _refused(f"there is no bot token — nothing set {BOT_TOKEN_FROM}. A file is fetched "
+                        f"with the same credential this channel connects with, so there is nothing "
+                        f"here to fetch it with")
+    try:
+        asked = _one_request()
+        place, at = _the_message(str(asked.get("ref") or ""))
+    except Refused as why:
+        return _refused(str(why))
+    home = (os.environ.get("RUNDESK_CHANNEL_HOME") or "").strip()
+    if not home or not Path(home).is_absolute():
+        return _refused("nothing said where this channel may put what it fetches — "
+                        "RUNDESK_CHANNEL_HOME has to name this channel's own directory by an "
+                        "absolute path, and a file put anywhere else is one rundesk will not take")
+    web = WebClient(token=bot, timeout=A_LOOK_WITHIN)
+    try:
+        who = web.auth_test()
+    except Exception as why:               # noqa: BLE001 — a platform boundary
+        return _refused(_why_slack_refused(why))
+    if "files:read" in set(_scopes_lacking(who, FURTHER_SCOPES)):
+        return _refused(WITHOUT_FILES)
+    try:
+        # Slack's own way of naming one message: the same second at both ends, and inclusive.
+        answered = web.conversations_history(channel=place, oldest=at, latest=at,
+                                             inclusive=True, limit=1)
+    except Exception as why:               # noqa: BLE001 — a platform boundary
+        return _refused(f"could not read the message that reference names: "
+                        f"{_why_slack_refused(why)}")
+    found = None
+    for one in (answered.get("messages") or []):
+        if isinstance(one, dict) and str(one.get("ts") or "") == at:
+            found = one
+            break
+    if found is None:
+        return _refused(f"no message stands at {place}{REF_IN}{at} — it may have been deleted, or "
+                        f"this app may no longer be in that conversation")
+    brought, stopped = _staged(found, bot, Path(home) / FETCHED_IN / at)
+    say({"ok": True, "message": at, "attachments": brought, "partial": " ".join(stopped)})
+    return 0
+
+
+def _staged(found: Dict[str, Any], bot: str,
+            into: Path) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Every file on this message that came, and a line for each one that did not.
+
+    **What Slack declared, never what this measured.** Rundesk checks the declared size against the
+    file it lands, and a number taken from this program's own `stat()` would make that check compare
+    rundesk's measurement with rundesk's measurement — it would agree always, and a documented
+    guarantee would have no way to fire. Left out entirely where Slack declared nothing, because
+    said-nothing and said-zero are different answers and rundesk reads an absent one as the first.
+    """
+    files = found.get("files")
+    files = files if isinstance(files, list) else []
+    brought: List[Dict[str, Any]] = []
+    stopped: List[str] = []
+    for nth, one in enumerate(files[:BROUGHT_MOST]):
+        if not isinstance(one, dict):
+            continue
+        name = flat(one.get("name") or one.get("title") or str(nth))
+        size = one.get("size")
+        declared = size if isinstance(size, int) and not isinstance(size, bool) and size > 0 else 0
+        url = str(one.get("url_private_download") or one.get("url_private") or "")
+        if not url:
+            stopped.append(f"Could not bring in {name}: Slack published no download url for it.")
+            continue
+        if declared > BROUGHT_BYTES:
+            stopped.append(f"Could not bring in {name}: Slack says it is {declared} bytes, past "
+                           f"the {BROUGHT_BYTES} one message may bring in.")
+            continue
+        at = into / str(nth)
+        try:
+            into.mkdir(parents=True, exist_ok=True)
+            _brought_in(url, bot, at)
+        except Refused as why:
+            _dropped(at)
+            stopped.append(f"Could not bring in {name}: {why}.")
+            continue
+        except Exception as why:           # noqa: BLE001 — a platform boundary
+            # **Nothing is left behind on the way out.** A path this never reports is a path rundesk
+            # never hears of, so the sweep that removes every staged file it was told about cannot
+            # remove this one. Dropped by hand, or it is debris for the life of the install.
+            _dropped(at)
+            stopped.append(f"Could not bring in {name}: {type(why).__name__}: {why}.")
+            continue
+        said: Dict[str, Any] = {"at": str(at), "name": name}
+        if declared:
+            said["bytes"] = declared
+        brought.append(said)
+    if len(files) > BROUGHT_MOST:
+        stopped.append(f"{len(files)} files are on that message and only the first {BROUGHT_MOST} "
+                       f"were brought in.")
+    return brought, stopped
+
+
+def _not_a_slack_file(url: str) -> str:
+    """Why this is not a link to a file on Slack, or `""` when it is.
+
+    A host is matched on its labels rather than on how the name ends, so `slack.com.example.invalid`
+    is not `slack.com` — the string test that reads as obviously right is the one that lets a
+    lookalike through.
+    """
+    try:
+        where = urlparse(url)
+    except ValueError:
+        return "the link Slack gave for it could not be read as one"
+    if where.scheme.lower() != FETCHED_OVER:
+        return (f"the link Slack gave for it is not {FETCHED_OVER}, and nothing else is fetched "
+                f"from — a file this program may open is not a file somebody sent")
+    host = (where.hostname or "").lower()
+    if not any(host == one or host.endswith("." + one) for one in FETCHED_FROM):
+        return "the link Slack gave for it does not point at Slack, so nothing was fetched from it"
+    return ""
+
+
+def _brought_in(url: str, bot: str, at: Path) -> None:
+    """One Slack file onto the disk, refused the moment it is past what may be brought in.
+
+    **The bot token goes in the header and never in the url.** A `url_private_download` is not a
+    signed link: it answers with an HTML sign-in page to anyone who asks for it unauthenticated, and
+    a query-string credential is one that lands in every log between here and Slack.
+
+    **Bounded while it is being read rather than afterwards.** A platform that declared a small file
+    and sends an enormous one is otherwise thirty-two megabytes of somebody's disk before anything
+    notices, and the refusal has to happen where the writing does.
+
+    **And the link is checked before it is opened**, because it is the one value out of Slack's JSON
+    this used on trust — see `FETCHED_FROM` for the two things that made that matter.
+    """
+    trouble = _not_a_slack_file(url)
+    if trouble:
+        raise Refused(trouble)
+    request = Request(url, headers={"Authorization": f"Bearer {bot}"})
+    written = 0
+    with contextlib.closing(urlopen(request, timeout=A_DOWNLOAD_WITHIN)) as answering:
+        # **Where it ended up, checked again.** A redirect is followed before this side sees the
+        # answer, and `urllib` carries the `Authorization` header across it — so the host that
+        # really answered is the one that has to be a Slack host, not the one that was asked.
+        landed = _not_a_slack_file(str(getattr(answering, "url", url) or url))
+        if landed:
+            raise Refused(landed)
+        with open(str(at), "wb") as into:
+            while True:
+                block = answering.read(A_BLOCK)
+                if not block:
+                    break
+                written += len(block)
+                if written > BROUGHT_BYTES:
+                    raise Refused(f"it is past the {BROUGHT_BYTES} bytes one message may bring in")
+                into.write(block)
+
+
+def _dropped(at: Path) -> None:
+    """Remove a staged file that will not be reported, and never one that will."""
+    with contextlib.suppress(OSError):
+        at.unlink()
+
+
+# ---------------------------------------------------------------------------------------------
+# What the two of them are asked, and how each answer is shaped.
+# ---------------------------------------------------------------------------------------------
+
+
+def _one_request(stream: Any = None) -> Dict[str, Any]:
+    """The one JSON object rundesk wrote on this program's standard input.
+
+    Bounded on the way in: rundesk writes a request of at most sixteen kilobytes and closes the
+    pipe behind it, and `READS_MOST` is here so that an input nothing closes cannot grow this
+    process without bound.
+    """
+    said = (stream if stream is not None else sys.stdin).read(READS_MOST)
+    try:
+        asked = json.loads(said or "")
+    except (TypeError, ValueError) as why:
+        raise Refused(f"what arrived on this program's input is not JSON ({why})") from why
+    if not isinstance(asked, dict):
+        raise Refused("what arrived on this program's input is not a JSON object")
+    return asked
+
+
+def _asked(said: Dict[str, Any]) -> Asked:
+    """One request object as the search it asks for, trusting no type it was handed.
+
+    Every bound rundesk applies is applied again here. That is not distrust of rundesk: this is a
+    program anything on the machine may run, and a bound that only holds when the caller applied it
+    is not a bound.
+    """
+    most = said.get("limit")
+    if isinstance(most, bool) or not isinstance(most, int):
+        most = RESULTS_UNSAID
+    return Asked(words=str(said.get("words") or "")[:WORDS_MOST],
+                 place=str(said.get("place") or ""),
+                 user=str(said.get("user") or ""),
+                 since=str(said.get("since") or ""),
+                 until=str(said.get("until") or ""),
+                 most=max(1, min(most, RESULTS_MOST)))
+
+
+def _holds(said: str, words: str) -> bool:
+    """Whether this message answers the words asked for: **every one of them, in any order,
+    ignoring case**.
+
+    The plainest rule that cannot surprise, and it is this file's because Slack publishes no search
+    a bot token may call. An empty ask matches everything, exactly as an empty place and an empty
+    person do — `""` means unscoped in all three.
+    """
+    wanted = words.lower().split()
+    if not wanted:
+        return True
+    holds = said.lower()
+    return all(one in holds for one in wanted)
+
+
+def _midnight(said: str) -> float:
+    """`YYYY-MM-DD` as the unix second that day begins, in UTC. `Refused` for anything else.
+
+    **UTC, and said so wherever a window is reported.** A day is a different eight hours in Auckland
+    than in Los Angeles, and a search quietly using the machine's own zone would answer a
+    differently-bounded question on every install it ran on.
+    """
+    try:
+        at = time.strptime(said, "%Y-%m-%d")
+    except (TypeError, ValueError) as why:
+        raise Refused(f"{said!r} is not a day this can search from — a day is written "
+                      f"YYYY-MM-DD") from why
+    return float(calendar.timegm(at))
+
+
+def _a_day(seconds: float) -> str:
+    """One unix second as the UTC day it falls in."""
+    return time.strftime("%Y-%m-%d", time.gmtime(seconds))
+
+
+def _when(at: str) -> str:
+    """A Slack `ts` as the UTC instant an agent can compare with any other. `""` for anything else.
+
+    **One spelling for every result**, because an agent reading two of them has to be able to put
+    them in order without knowing which platform either came from.
+    """
+    seconds = _as_a_number(at)
+    if not seconds:
+        return ""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(seconds))
+
+
+def _a_ref(place: str, at: str) -> str:
+    """The short opaque string `fetch` resolves back to exactly this one message.
+
+    Slack's own two ids with a separator between them, because together they are unique and
+    separately neither is. `""` where either is missing or the whole is past what rundesk carries — a
+    result without a `ref` is still a result, and a `ref` that will not resolve is worse than none.
+    """
+    if not place or not at or REF_IN in place or REF_IN in at:
+        return ""
+    said = f"{place}{REF_IN}{at}"
+    return said if len(said) <= REF_MOST else ""
+
+
+def _the_message(ref: str) -> Tuple[str, str]:
+    """One `ref` read back as the conversation and the `ts` inside it.
+
+    `Refused` rather than a guess for anything that is not one: a fetch aimed at a message this
+    cannot name is a fetch that must say so, and downloading whatever a plausible reading pointed at
+    would be bringing somebody a file from a conversation they did not ask about.
+    """
+    parts = str(ref or "").split(REF_IN)
+    if len(parts) != 2 or not parts[0] or not parts[1] or len(ref) > REF_MOST:
+        raise Refused(f"{ref!r} is not a reference this adapter wrote — one is a Slack "
+                      f"conversation id and a message ts, written `C…{REF_IN}1700000000.000100`")
+    if not _as_a_number(parts[1]):
+        raise Refused(f"{ref!r} does not name a Slack message — the part after {REF_IN!r} is a "
+                      f"`ts`, which is a number")
+    return parts[0], parts[1]
+
+
+def _attached(said: Any) -> List[Dict[str, Any]]:
+    """What a found message carries, described and never fetched.
+
+    Described here so an agent can decide whether a file is worth having before anything downloads
+    one — which is the whole reason `fetch` is a second act. `bytes` is kept only where Slack really
+    said a number.
+    """
+    brought: List[Dict[str, Any]] = []
+    for one in (said if isinstance(said, list) else [])[:BROUGHT_MOST]:
+        if not isinstance(one, dict):
+            continue
+        described: Dict[str, Any] = {"name": flat(one.get("name") or one.get("title") or "")}
+        size = one.get("size")
+        if isinstance(size, int) and not isinstance(size, bool) and size > 0:
+            described["bytes"] = size
+        brought.append(described)
+    return brought
+
+
+# ---------------------------------------------------------------------------------------------
 # Question three: carry conversations for as long as the agent is up.
 # ---------------------------------------------------------------------------------------------
 
@@ -1569,6 +2644,9 @@ class Reaching:
         #: Where a message this has seen is standing, by its own id, so a mark can be put on one
         #: without asking Slack about it again.
         self.standing: Dict[str, str] = {}
+        #: The direct conversation one person reads, by their own id. Held for the life of this
+        #: process because it does not change, and written down nowhere because Slack owns it.
+        self.opened: Dict[str, str] = {}
         #: The visual target of the prompted answer being written into each conversation, by that
         #: conversation's own key (R-SLK-14). **Rundesk puts `reply_to` on the first piece of a
         #: split answer and the files on the last**, so every piece after the first carries nothing
@@ -1973,6 +3051,7 @@ class Reaching:
             return
         self._remember(self.standing, woken.ts, woken.channel)
         self._remember(self.replying, woken.ts, woken.answer_in)
+        handle = a_handle_for(woken.user)
         say({"say": "arrived",
              "conversation": conversation_of(self.team, woken.channel, woken.thread),
              # **The stable id of the place, in a field of its own.** `place` below is a word for a
@@ -1982,6 +3061,10 @@ class Reaching:
              "place": "dm" if woken.direct else "room",
              "user": woken.user,
              "display": self._a_name(woken.user),
+             # **How to mention them, beside what to call them** (R-SLK-65). Sent only where the id
+             # is one `escaped_keeping_mentions` would keep, so nothing here teaches a brain a token
+             # the answer path would then escape into punctuation.
+             **({"mention": handle} if handle else {}),
              "where": self._where_this_is(woken),
              "text": text,
              "external_id": woken.ts})
@@ -2083,9 +3166,7 @@ class Reaching:
         refuses — and an empty one must never match a message that carries none, or every ordinary
         person's line would read as ours.
         """
-        wrote = str(one.get("bot_id") or "")
-        who = str(one.get("user") or "")
-        return bool(self.our_bot and wrote == self.our_bot) or bool(self.ours and who == self.ours)
+        return written_by_us(one, self.ours, self.our_bot)
 
     def _who_said(self, one: Dict[str, Any]) -> str:
         """What to call whoever wrote this line, as one bounded, flattened label.
@@ -2097,10 +3178,7 @@ class Reaching:
         and clipped exactly as a display name is.
         """
         if one.get("bot_id"):
-            profile = one.get("bot_profile")
-            named = (profile.get("name") if isinstance(profile, dict) else None) or \
-                one.get("username") or one.get("bot_id")
-            return flat(named)
+            return named_in(one)
         return self._a_name(str(one.get("user") or ""))
 
     def _a_name(self, who: str) -> str:
@@ -2118,9 +3196,7 @@ class Reaching:
             return held
         named = who
         try:
-            profile = (self.web.users_info(user=who).get("user") or {})
-            named = flat((profile.get("profile") or {}).get("display_name")
-                         or profile.get("real_name") or profile.get("name") or who)
+            named = named_as(self.web.users_info(user=who).get("user") or {}, who)
         except Exception as why:           # noqa: BLE001 — a platform boundary
             self._final(why)
         self._remember(self.people, who, named or who)
@@ -2155,9 +3231,7 @@ class Reaching:
             return held
         found = ("", channel.startswith("G"), False)
         try:
-            said = self.web.conversations_info(channel=channel).get("channel") or {}
-            found = (flat(said.get("name"), WHERE_AT_MOST), bool(said.get("is_private")),
-                     bool(said.get("is_ext_shared")))
+            found = a_room_from(self.web.conversations_info(channel=channel).get("channel") or {})
         except Exception as why:           # noqa: BLE001 — a platform boundary
             self._final(why)
         self._remember(self.rooms, channel, found)
@@ -2379,6 +3453,45 @@ class Reaching:
             # not know is not a channel that has gone wrong.
             noted(f"nothing here does {doing!r}", "info")
 
+    def _addressed(self, aimed: Tuple[str, str]) -> str:
+        """The Slack conversation one named destination is written into. `Refused` when it cannot be.
+
+        A place is already a conversation id — a `C`, a `G` or a `D`, which is what an allow list's
+        places name. A person is not: the id names *them*, and the conversation they read is opened
+        with `conversations.open`, which needs the bot token this side holds and rundesk does not.
+
+        **Opened once and remembered.** A direct conversation does not change, and opening one is a
+        round trip on the path of every notice a schedule sends.
+
+        **Refused rather than degraded.** Everything else here that cannot reach the platform falls
+        back to something reasonable; there is nothing reasonable for a delivery somebody addressed,
+        because every other conversation in reach is one they did not choose.
+        """
+        kind, named = aimed
+        if kind == "place":
+            return named
+        held = self.opened.get(named)
+        if held is not None:
+            return held
+        try:
+            found = self.web.conversations_open(users=named)
+        # A platform boundary, like every other broad catch here — and **the only one that carries no
+        # `noqa`**, because it is the only one that re-raises. `BLE001` is about a handler that
+        # swallows; one that translates and raises on is not blind, so a directive here would be a
+        # suppression of nothing. The behaviour is deliberate and unchanged: anything the SDK throws
+        # reaches `_final`, which ends the connection on a `401` and leaves every other failure to
+        # this delivery alone, and then leaves as a `Refused` so `_deliver` reports `failed` rather
+        # than posting somewhere nobody chose.
+        except Exception as why:
+            self._final(why)
+            raise Refused(f"Slack would not open a direct conversation with {named}: "
+                          f"{_why_slack_refused(why)}") from why
+        where = str((found.get("channel") or {}).get("id") or "")
+        if not where:
+            raise Refused(f"Slack opened no direct conversation with {named}")
+        self.opened[named] = where
+        return where
+
     def _deliver(self, it: Dict[str, Any]) -> None:
         """Post what the agent said and report Slack's own id for it — or say why not.
 
@@ -2442,8 +3555,21 @@ class Reaching:
                               f"splitting happens once, on rundesk's side, for every platform")
             if not text.strip() and not carrying:
                 raise Refused("there was nothing to deliver: no text, and no file")
-            _, channel, thread = where_of(it.get("place"))
-            thread = self._answer_in(it, str(it.get("place") or ""), thread)
+            aimed = _aimed_at(it.get("to"))
+            if aimed is None:
+                _, channel, thread = where_of(it.get("place"))
+                thread = self._answer_in(it, str(it.get("place") or ""), thread)
+            else:
+                # **`to` supersedes `place` and the place is not looked at.** A destination somebody
+                # named is not necessarily one this adapter has ever written to, so it has no
+                # conversation string of ours — which is exactly why it crosses as an id — and no
+                # prompted answer stands in it for `_answer_in` to resolve a target from.
+                channel, thread = self._addressed(aimed), ""
+            # A thread, where rundesk asked for one and named the message to hang it off. On Slack
+            # a reply *is* a thread, so this is `thread_ts` and nothing has to be opened: the name
+            # rundesk sent is for a platform that needs one and is deliberately unused here.
+            if it.get("threaded") and it.get("reply_to"):
+                thread = str(it["reply_to"])
         except (Refused, TypeError, ValueError) as why:
             say({"say": "failed", "id": given, "why": str(why)})
             return
@@ -2949,19 +4075,28 @@ def serving() -> int:
 
 
 def main(argv: List[str]) -> int:
-    """The three invocations, and nothing that quietly resembles one of them.
+    """The five invocations, and nothing that quietly resembles one of them.
 
     Matched exactly rather than searched for: an adapter that took a mistyped `--check` for a request
-    for its capabilities would answer a question nobody asked and look as though it worked.
+    for its capabilities would answer a question nobody asked and look as though it worked, and one
+    that took `--search` for `search` would read a request off an input nothing wrote to.
+
+    **`search` and `fetch` are the two an agent causes**, in the middle of a turn, and both are
+    bounded programs of their own rather than words down a hosted channel's pipe — so both work in a
+    turn a schedule started, neither takes the channel's claim, and neither displaces a `serve`.
     """
     if argv == ["--capabilities"]:
         return capabilities()
     if argv[:1] == ["--check"]:
         return check(list(argv[1:]))
+    if argv == ["search"]:
+        return search()
+    if argv == ["fetch"]:
+        return fetch()
     if argv == ["serve"]:
         return serving()
     cannot_say(f"slack: {' '.join(argv) or 'nothing'} is not one of --capabilities, "
-               f"--check [options] or serve")
+               f"--check [options], search, fetch or serve")
     return 2
 
 

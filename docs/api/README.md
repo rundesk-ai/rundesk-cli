@@ -1,6 +1,6 @@
 # api/
 
-Every operation Rundesk offers. **Twenty-one commands, and every one works** — there is no
+Every operation Rundesk offers. **Twenty-two commands, and every one works** — there is no
 "coming soon" list: a verb Rundesk cannot perform is a verb Rundesk does not have.
 
 `rundesk --help` is the count that cannot go stale. Where it and this directory disagree, believe the
@@ -12,7 +12,7 @@ command.
 | [configure.md](./configure.md) | `configure`, `env`, `backups`, `permissions` |
 | [agents.md](./agents.md) | `agents` — list, add, configure, remove |
 | [gateways.md](./gateways.md) | `gateways` — list, start, stop, restart, logs, run |
-| [conversations.md](./conversations.md) | `ask`, `asked`, `messages`, `turns` |
+| [conversations.md](./conversations.md) | `ask`, `asked`, `messages`, `search`, `turns` |
 | [providers.md](./providers.md) | `providers`, `login`, and the private token bridge |
 | [schedules.md](./schedules.md) | `schedules` — list, add, update, show, run, remove |
 | [channels.md](./channels.md) | `channels` — list, add, show, configure, test, remove, doctor |
@@ -56,6 +56,8 @@ rundesk asked say <id> <words>            # steer work that is still going
 rundesk asked stop <id>                   # ask for work to end before it finishes
 rundesk asked resume <id> <words>         # carry a finished one on, in the session it had
 rundesk messages <agent> [--search <words>] [--channel <channel>] [--source <kind>] [--conversation <id>] [--since <YYYY-MM-DD>] [--limit <n>] [--full]
+rundesk search <agent> <words> [--channel <channel>] [--place <id>] [--from <id>] [--since <YYYY-MM-DD>] [--until <YYYY-MM-DD>] [--limit <n>] [--full]   # ask the platforms an agent is connected to
+rundesk search <agent> --fetch <ref> --channel <channel>   # bring one result's attachments in
 rundesk providers list                    # every provider adapter this install can run
 rundesk providers check <provider>        # ask one what it can do, offline
 rundesk providers instructions [<agent>] [--situation <person|schedule|agent>] [--layers] [--turn <turn>]
@@ -71,8 +73,8 @@ rundesk permissions lineage               # whose grants an answer here would be
 rundesk permissions check [<probe> ...] [--everything] [--verbose]   # prove them now, and record it
 rundesk turns <agent> [<turn>] [--limit <n>] [--conversation <id>]
 rundesk schedules list [<agent>] [--expired]    # everything every agent starts because the time came
-rundesk schedules add <agent> <schedule> --when '<cron>' | --at <moment> --run '<program>' | --ask '<prompt>' [--until <moment>] [--disabled]
-rundesk schedules update <agent> <schedule> [--when|--at|--until|--run|--ask|--enable|--disable]
+rundesk schedules add <agent> <schedule> --when '<cron>' | --at <moment> --run '<program>' | --ask '<prompt>' [--until <moment>] [--disabled] [--channel <channel> --to <id>]
+rundesk schedules update <agent> <schedule> [--when|--at|--until|--run|--ask|--enable|--disable|--channel <channel> --to <id>]
 rundesk schedules show <agent> <schedule> # everything one was given
 rundesk schedules run <agent> <schedule> [--wait <seconds>]   # run one now, in this terminal
 rundesk schedules remove <agent> <schedule>       # take one away
