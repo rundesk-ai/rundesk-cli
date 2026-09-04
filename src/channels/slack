@@ -112,6 +112,7 @@ import os
 import re
 import signal
 import stat
+import subprocess
 import sys
 import tempfile
 import threading
@@ -533,22 +534,38 @@ STOPPING_WITHIN = 1.0
 #: one was a mistake worth naming here. `files_upload_v2` makes three requests, and the one that
 #: carries the bytes ends in `urlopen(…, timeout=)`, which bounds a single blocking socket
 #: operation rather than the transfer around it — thirty-two megabytes trickling steadily never
-#: trips it, and each request carries its own. What this really bounds is how long an upload the
-#: delivery has stopped waiting for can go on holding a stalled connection.
+#: trips it, and each request carries its own. So it is a floor under how badly one request can go
+#: and never the deadline a delivery needs.
 #:
-#: **`UPLOADS_WITHIN` is the bound that is enforced, and it is enforced by waiting rather than by
-#: asking.** Each upload runs on a worker this joins for whatever is left of the budget, so the
-#: answer about a file is written at the deadline however far that upload had got. Measured from the
-#: moment the delivery was taken up, so the message posted before the files is spent out of the same
-#: wait: a slow platform costs the files rather than the honesty of the answer about them.
+#: **`UPLOADS_WITHIN` is the bound that is enforced, and it is enforced by ending the upload.** Each
+#: one runs in a process of its own that the delivery waits on for whatever is left of the budget
+#: and kills at the deadline — see `an_upload`. Measured from the moment the delivery was taken up,
+#: so the message posted before the files is spent out of the same wait: a slow platform costs the
+#: files rather than the honesty of the answer about them.
 #:
-#: **What that costs is a file that may arrive after it was reported as not gone.** An upload given
-#: up on is not cancelled, and Slack may complete it — see `_uploading`, which says what is left
-#: running. So the report is what this adapter knows at the deadline, which is that the file did not
-#: go. The alternative is calling something still in flight a success, and that cannot be told from
-#: a file that really arrived.
-UPLOADS_WITHIN = 8.0
+#: **Ending one is spent out of rundesk's wait too, so the budget leaves room for it.** The kill and
+#: the reap take `ENDING_WITHIN` at worst, and they happen *before* the terminal record is written —
+#: so what has to fit inside `providers.answering.LANDS_WITHIN` is this number, that one, and a
+#: margin. `tests/test_providers_answering.py` is where the three are added up, because it is the
+#: only side that can see both programs.
+#:
+#: **A worker could not be that bound and a process can.** A thread blocked inside the vendor client
+#: cannot be cancelled from outside, so a deadline that only stopped waiting left the upload running
+#: — holding this process's memory and a connection, and letting Slack complete it minutes later
+#: under an answer already reported as having lost it. `files_upload_v2` shares a file only in its
+#: third request, so an upload ended before that request has no file that can appear afterwards.
+#:
+#: **The one race left is named rather than closed.** A kill can land after Slack accepted that
+#: third request and before its answer was read, and an acceptance nobody acknowledged cannot be
+#: told from one that never happened — so what is reported is still what this adapter knows at the
+#: deadline, which is that the file did not go.
+UPLOADS_WITHIN = 7.0
 AN_UPLOAD_WITHIN = 6.0
+
+#: How long to spend ending an upload that was given up on, and reaping what is left of it. **Short
+#: on purpose**: the signal that ends it can be neither caught nor ignored, so this is time the
+#: kernel needs rather than time an upload is being asked to stop in.
+ENDING_WITHIN = 2.0
 
 #: How long one Web API call may take, and how much of stdin is held at once. The second is not a
 #: limit on what rundesk may say — only on how much of one line is held, so a sender that never
@@ -2635,10 +2652,6 @@ class Reaching:
         self.allow = allow
         self.places = places
         self.web: Any = None
-        #: The same Web API under a shorter ceiling, for uploads alone. **One client cannot carry
-        #: both**: `CALL_WITHIN` is right for a call a person is not waiting on the far side of, and
-        #: far too long for one inside a delivery's own budget — see `UPLOADS_WITHIN`.
-        self.uploads: Any = None
         self.socket: Any = None
         #: Who this bot is, and which workspace it is in. All of it comes from `auth.test` at
         #: startup and none of it is guessed: the member id is what a mention is recognised by, the
@@ -2738,7 +2751,6 @@ class Reaching:
         reached. Handled, the wait below ends and the cleanup that was always written runs.
         """
         self.web = WebClient(token=bot, timeout=CALL_WITHIN)
-        self.uploads = WebClient(token=bot, timeout=AN_UPLOAD_WITHIN)
         try:
             who = self.web.auth_test()
         except Exception as why:           # noqa: BLE001 — a platform boundary
@@ -3725,9 +3737,9 @@ class Reaching:
             snapshot = None
             try:
                 snapshot, filename = a_verified_file(one)
-                # **The bytes are taken here and the snapshot let go of here.** What waits below
-                # holds only what was verified, so nothing that has to be closed outlives this
-                # loop — see `_uploading`, which may be left running after it.
+                # **The bytes are taken here and the snapshot let go of here.** What goes below
+                # is only what was verified, so nothing that has to be closed crosses into the
+                # process that carries it — see `_uploading`.
                 blob = snapshot.read()
                 snapshot.close()
                 snapshot = None
@@ -3747,47 +3759,53 @@ class Reaching:
 
     def _uploading(self, filename: str, blob: bytes, channel: str, thread: str,
                    within: float) -> str:
-        """One upload, waited on for `within` and given up on at it. `""` when the file went.
+        """One upload, run where it can be ended and ended at `within`. `""` when the file went.
 
-        **A deadline needs somewhere to walk away from**, and a Web API call is not that: the
-        vendor client is synchronous, `files_upload_v2` is three requests, and the timeout on the
-        one that carries the bytes bounds a socket operation rather than the transfer. So the call
-        is made on a worker and this waits on the worker, which is a bound that holds whatever the
-        network does.
+        **A deadline needs somewhere to walk away from, and a worker is not that.** The vendor
+        client is synchronous, `files_upload_v2` is three requests, and the timeout on the one that
+        carries the bytes bounds a socket operation rather than the transfer — so a thread joined
+        for what is left of the budget is a bound on the *waiting* and none at all on the upload.
+        That was the defect this closes. The upload went on running: holding this process's memory
+        and a connection for as long as the platform took, and finishing into a conversation
+        minutes after the delivery had been reported as having lost the file, with no line beside
+        it saying where it came from.
 
-        **The worker is left running, and that is the honest cost of the deadline.** It is a daemon
-        so it can never hold this process open, it holds bytes rather than any file this loop has
-        to close, and there is nothing here to cancel it with — Slack may well complete the upload
-        after the delivery has been reported as having lost it. So the file may appear in the
-        conversation a minute later with no line beside it, and the alternative was calling
-        something still in flight a success, which cannot be told from a file that really arrived.
-        `AN_UPLOAD_WITHIN` is what stops an abandoned worker holding a stalled socket for ever.
+        **So the upload runs in a process of its own and is killed at the deadline** — see
+        `an_upload`. The signal can be neither caught nor ignored, so nothing of the upload outlives
+        the delivery that gave up on it, and no stage of the exchange can begin after the kill.
+        That is what makes the report honest rather than merely prompt: Slack shares the file only
+        in the third request, so an upload ended before that request has no file that can appear.
 
-        **A refusal is carried back to this thread rather than acted on inside the worker**, so
+        **The one race left is named rather than closed.** The kill can land after Slack accepted
+        that third request and before its answer was read, and an acceptance nobody acknowledged
+        cannot be told from one that never happened — so this reports what it knows, which is that
+        the file did not go. The alternative is a tick over an answer whose file may be missing.
+
+        **A refusal is carried back to this thread rather than acted on inside the upload**, so
         `_final` still ends the adapter for a credential Slack will never accept again — one
         thread decides that, and it is this one.
+
+        **Slack refused it, and this could not ask, are two different answers** and are never
+        blurred into one. Only a refusal carrying Slack's own word for it is reported as Slack's;
+        a missing library, a token that never reached the upload, a request it could not read and a
+        process that exited saying nothing are all *this side* failing, and saying Slack would not
+        take a file it was never shown is telling somebody to go and look in the wrong place.
         """
-        outcome: Dict[str, Any] = {}
-
-        def uploading() -> None:
-            try:
-                self.uploads.files_upload_v2(
-                    channel=channel, filename=filename, content=blob,
-                    **({"thread_ts": thread} if thread else {}))
-            except Exception as why:       # noqa: BLE001 — a platform boundary, carried back below
-                outcome["why"] = why
-
-        worker = threading.Thread(target=uploading, name="uploading", daemon=True)
-        worker.start()
-        worker.join(within)
-        if worker.is_alive():
+        answered = an_upload(filename, blob, channel, thread, within)
+        if answered.get("given_up"):
             return (f"the {UPLOADS_WITHIN:g}s this delivery has to answer in was spent while it "
-                    f"was still going up, so it was given up on")
-        why = outcome.get("why")
-        if why is None:
+                    f"was still going up, so it was given up on and ended where it stood, and "
+                    f"nothing acknowledged it")
+        if answered.get("ok"):
             return ""
-        self._final(why)
-        return f"Slack would not take it: {_why_slack_refused(why)}"
+        why = str(answered.get("why") or "the upload ended without saying why")
+        said = str(answered.get("slack") or "")
+        if not said:
+            return f"the upload could not be made: {why}"
+        # Slack's own word, so the rule about which refusals end this adapter reads it here — the
+        # same rule, in the same place, as every other call in this file.
+        self._final(Elsewhere(why, said))
+        return f"Slack would not take it: {why}"
 
     def _answer_in(self, it: Dict[str, Any], place: str, thread: str) -> str:
         """Where this delivery belongs: one target for every piece of one prompted answer.
@@ -4128,8 +4146,216 @@ def serving() -> int:
     return Reaching(allow, places).run(bot, app)
 
 
+# ---------------------------------------------------------------------------------------------
+# Question six: put one file up, somewhere a delivery can end it.
+# ---------------------------------------------------------------------------------------------
+
+
+class Elsewhere(Exception):
+    """A refusal that happened in an upload's own process, in the shape this file already reads.
+
+    `_final`, `_will_not_come_right` and `_why_slack_refused` all ask a refusal the same thing:
+    Slack's own word for it, off `response`. Carrying that word back across the pipe and putting it
+    on an exception here is what keeps the rule about which refusals end the adapter in one place,
+    rather than growing a second copy of it for uploads alone.
+    """
+
+    def __init__(self, said: str, error: str) -> None:
+        super().__init__(said)
+        #: What `_slack_said` reads. `None` where Slack gave no word of its own, which is the state
+        #: a network failure arrives in and is not the same as a refusal it had a word for.
+        self.response: Optional[Dict[str, str]] = {"error": error} if error else None
+
+
+def an_upload_command() -> List[str]:
+    """How one upload is run: this interpreter, this program, and the one word that means upload.
+
+    **Nothing is located.** `sys.executable` is the interpreter already running this adapter, which
+    is the one rundesk chose and handed over on `PATH` — see `the_library`, which refuses to go
+    looking for another. An upload started under anything else could find a different `slack_sdk`,
+    or none at all, and would be a second answer to a question rundesk has already settled.
+    """
+    return [sys.executable or "python3", str(Path(__file__).resolve()), "upload"]
+
+
+def an_upload(filename: str, blob: bytes, channel: str, thread: str,
+              within: float) -> Dict[str, Any]:
+    """Put one file up in a process of its own, and end that process at `within`.
+
+    Hands back what the upload said about itself: `ok` where the file went, `given_up` where the
+    deadline ended it, and otherwise the refusal it carried back — see `_uploading`, which decides
+    what each of those means for the delivery.
+
+    **The request is a line and then the bytes it declared**, on the upload's own standard input, so
+    nothing about a file is ever an argument another process on this machine can read. No credential
+    crosses it at all: the upload reads the bot token the one way it is ever read.
+
+    **Killed rather than asked to stop.** There is nothing to ask: the vendor call is synchronous
+    and the deadline belongs to a delivery this cannot make wait. Reaped in the same breath, so an
+    adapter that runs for weeks accumulates no upload it once gave up on.
+
+    **Held rather than scoped, because every way out of here has to be a bounded one.** `Popen` as a
+    context manager waits without a timeout on the way out, which is the one wait this function
+    exists to prevent — a delivery would answer whenever the platform let it. So the process is kept
+    in hand and `_ended` is what every failure leaves through.
+    """
+    asked = json.dumps({"filename": filename, "channel": channel, "thread_ts": thread,
+                        "bytes": len(blob), "within": within}).encode("utf-8") + b"\n"
+    try:
+        running = subprocess.Popen(an_upload_command(), stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except (OSError, ValueError) as why:
+        return {"ok": False,
+                "why": f"no process could be started to upload it: {type(why).__name__}: {why}"}
+    try:
+        answered, complained = running.communicate(asked + blob, timeout=within)
+    except subprocess.TimeoutExpired:
+        _ended(running)
+        return {"given_up": True}
+    except (OSError, ValueError) as why:
+        # A pipe that broke, a stream that would not be written: the upload is still alive and is
+        # still this function's to end before anything else is decided about it.
+        _ended(running)
+        return {"ok": False,
+                "why": f"the upload could not be carried out: {type(why).__name__}: {why}"}
+    except BaseException:
+        # An interrupt is not an outcome and is not swallowed — but it does not get to leave a
+        # process behind either, which is the whole reason this clause is here.
+        _ended(running)
+        raise
+    if complained:
+        # An upload has no words of its own for a traceback either, and the gateway rotates and
+        # shows this stream. Never a record: rundesk parses every line of the other one.
+        cannot_say(complained.decode("utf-8", "replace"))
+    return _what_became_of(answered, running.returncode)
+
+
+def _ended(running: Any) -> None:
+    """End an upload that was given up on, and reap it, so nothing of it outlives its delivery.
+
+    **Every step of it is bounded and none of it can raise.** This is reached from the deadline and
+    from a failure mid-flight, and in both a delivery is waiting to write the record that settles
+    its turn — so a cleanup that could block is the same defect in a smaller place.
+
+    **One allowance for the whole of it, and not one for each step.** `ENDING_WITHIN` is added into
+    the wait rundesk keeps for a delivery exactly once — see the seam guard in
+    `tests/test_providers_answering.py` — so two steps each given a fresh one would spend twice the
+    number that was added up, and the record that settles the turn would arrive after it had stopped
+    being read. The deadline is taken once here and every step after it gets what is left, which may
+    be nothing at all.
+    """
+    ending_at = time.monotonic() + ENDING_WITHIN
+    with contextlib.suppress(Exception):
+        running.kill()
+    with contextlib.suppress(Exception):
+        running.communicate(timeout=max(0.0, ending_at - time.monotonic()))
+    # Closed between the two, because `communicate` closes these itself when it gets that far and
+    # leaves them open when it does not — and a descriptor is not something to wait to reclaim.
+    for stream in (running.stdin, running.stdout, running.stderr):
+        if stream is not None:
+            with contextlib.suppress(Exception):
+                stream.close()
+    with contextlib.suppress(Exception):
+        running.wait(timeout=max(0.0, ending_at - time.monotonic()))
+
+
+def _what_became_of(answered: bytes, code: Optional[int]) -> Dict[str, Any]:
+    """The one record an upload writes about itself, or a sentence saying it wrote none.
+
+    **An upload that said nothing is a failure and never a success.** Reporting the file gone on the
+    strength of an exit status would be reporting an outcome nobody earned, which is the whole thing
+    the deadline exists to stop.
+    """
+    for line in answered.decode("utf-8", "replace").splitlines():
+        with contextlib.suppress(ValueError):
+            said = json.loads(line)
+            if isinstance(said, dict) and "ok" in said:
+                return said
+    return {"ok": False, "why": f"the upload ended ({code}) without saying what became of it"}
+
+
+def uploading() -> int:
+    """Put one file up for a delivery running elsewhere, and say what became of it.
+
+    **The one invocation rundesk never makes.** It is this program asking itself, over a pipe of its
+    own, because a delivery has a deadline and only a process can be held to one — see `_uploading`,
+    which says why a worker could not be. What arrives is one JSON line and then exactly the bytes
+    it declared; what goes back is one record, the same shape everything else here writes.
+
+    **No credential crosses that pipe.** The bot token is read the one way it is ever read, from the
+    names rundesk sealed it into — see `the_tokens` — so an upload holds nothing its parent had to
+    hand it and nothing about a token is ever written into an argument list.
+
+    **It ends itself if nobody else does.** The delivery kills this at its deadline; the timer is
+    what covers the delivery that is no longer there to.
+    """
+    try:
+        asked, blob = _an_upload_asked(sys.stdin.buffer)
+    except (OSError, ValueError) as why:
+        say({"ok": False, "why": f"the upload request could not be read: {why}"})
+        return 2
+    _ends_itself(asked.get("within"))
+    missing = the_library()
+    if missing:
+        say({"ok": False, "why": missing})
+        return 1
+    bot, _app = the_tokens()
+    if not bot:
+        say({"ok": False, "why": "no bot token reached this upload, so nothing was sent"})
+        return 1
+    thread = str(asked.get("thread_ts") or "")
+    try:
+        WebClient(token=bot, timeout=AN_UPLOAD_WITHIN).files_upload_v2(
+            channel=str(asked.get("channel") or ""), filename=str(asked.get("filename") or ""),
+            content=blob, **({"thread_ts": thread} if thread else {}))
+    except Exception as why:               # noqa: BLE001 — a platform boundary, carried back above
+        say({"ok": False, "why": _why_slack_refused(why), "slack": _slack_said(why)})
+        return 1
+    say({"ok": True})
+    return 0
+
+
+def _an_upload_asked(stream: Any) -> Tuple[Dict[str, Any], bytes]:
+    """One upload request: the line describing it, then exactly the bytes it declared.
+
+    **The declared length is also the bound on the read**, for the reason `a_verified_file` has no
+    constant for a file's size either: what is being carried is a snapshot something else has
+    already proved, so a ceiling of this program's own here would be a second answer to a question
+    that was settled before the bytes were handed over.
+    """
+    asked = json.loads(stream.readline(READS_MOST).decode("utf-8"))
+    if not isinstance(asked, dict):
+        raise ValueError("it was not an object")
+    length = asked.get("bytes")
+    if isinstance(length, bool) or not isinstance(length, int) or length < 0:
+        raise ValueError("it declared no length to read")
+    held = bytearray()
+    while len(held) < length:
+        block = stream.read(min(READ_BLOCK, length - len(held)))
+        if not block:
+            raise ValueError(f"it declared {length} bytes and {len(held)} arrived")
+        held.extend(block)
+    return asked, bytes(held)
+
+
+def _ends_itself(within: Any) -> None:
+    """End this process for certain, whether or not the delivery that asked for it is still there.
+
+    **A timer rather than a check**, because nothing here can watch a blocking vendor call from the
+    inside: the bound is the one the kernel keeps, and `SIGALRM`'s default action ends the process.
+    Set past the delivery's own deadline, because the kill from there is what should normally end
+    this and a timer that fired first would race it for nothing.
+    """
+    if isinstance(within, bool) or not isinstance(within, (int, float)):
+        return
+    if not math.isfinite(within) or within <= 0:
+        return
+    with contextlib.suppress(AttributeError, OSError, ValueError):
+        signal.setitimer(signal.ITIMER_REAL, float(within) + ENDING_WITHIN)
+
+
 def main(argv: List[str]) -> int:
-    """The five invocations, and nothing that quietly resembles one of them.
+    """The five invocations rundesk makes, the one this program makes of itself, and nothing else.
 
     Matched exactly rather than searched for: an adapter that took a mistyped `--check` for a request
     for its capabilities would answer a question nobody asked and look as though it worked, and one
@@ -4138,6 +4364,10 @@ def main(argv: List[str]) -> int:
     **`search` and `fetch` are the two an agent causes**, in the middle of a turn, and both are
     bounded programs of their own rather than words down a hosted channel's pipe — so both work in a
     turn a schedule started, neither takes the channel's claim, and neither displaces a `serve`.
+
+    **`upload` is nobody else's**, and it is here rather than hidden because a word matched exactly
+    is the only kind this file has: it is one file going up for a `serve` that is holding a delivery
+    open, and it appears in no capability, no document rundesk reads, and no gateway's command.
     """
     if argv == ["--capabilities"]:
         return capabilities()
@@ -4149,8 +4379,10 @@ def main(argv: List[str]) -> int:
         return fetch()
     if argv == ["serve"]:
         return serving()
+    if argv == ["upload"]:
+        return uploading()
     cannot_say(f"slack: {' '.join(argv) or 'nothing'} is not one of --capabilities, "
-               f"--check [options], search, fetch or serve")
+               f"--check [options], search, fetch, serve or upload")
     return 2
 
 
