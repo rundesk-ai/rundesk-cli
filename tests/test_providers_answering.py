@@ -2107,6 +2107,12 @@ class TheWaitAShippedAdapterAnswersInside(unittest.TestCase):
     and `src/rundesk` is deliberately off its path — so the check belongs on this side, which can
     see both.
 
+    **Three numbers rather than two, because ending an upload is spent out of the same wait.** The
+    adapter runs each upload in a process of its own and kills it at its deadline, and the kill and
+    the reap take `ENDING_WITHIN` at worst — *before* the terminal record is written. A sum that
+    counted only the running would leave a `failed` record arriving on the far side of the wait for
+    exactly the time the cleanup took.
+
     **What it prevents is a silent one.** Lower `LANDS_WITHIN` and nothing fails: the adapter goes
     on spending a budget that is now too long, its `failed` arrives after rundesk has stopped
     reading, the turn settles as complete, and a completion mark stands over an answer whose file
@@ -2117,8 +2123,9 @@ class TheWaitAShippedAdapterAnswersInside(unittest.TestCase):
     #: way `tests/test_channels_slack.py` loads it, and the same way rundesk runs it.
     ADAPTER = Path(__file__).resolve().parent.parent / "src" / "channels" / "slack"
 
-    #: How much room the adapter's budget must leave inside the wait. Enough for the record to be
-    #: written and read rather than to arrive on the boundary and be missed by a tenth of a second.
+    #: How much room the adapter's whole delivery must leave inside the wait. Enough for the record
+    #: to be written and read rather than to arrive on the boundary and be missed by a tenth of a
+    #: second.
     MARGIN = 1.0
 
     def the_adapter(self):
@@ -2131,12 +2138,13 @@ class TheWaitAShippedAdapterAnswersInside(unittest.TestCase):
     def test_the_adapter_answers_a_delivery_inside_the_wait_for_it(self) -> None:
         slack = self.the_adapter()
         self.assertLessEqual(
-            slack.UPLOADS_WITHIN + self.MARGIN, answering.LANDS_WITHIN,
-            f"the Slack adapter gives one delivery {slack.UPLOADS_WITHIN:g}s of file work while "
-            f"rundesk waits {answering.LANDS_WITHIN:g}s for its answer — a `failed` record written "
-            f"after that wait is read by nothing, and the turn keeps its completion mark")
-        # The socket ceiling is what bounds an upload this adapter has stopped waiting for. It sits
-        # under the budget for the same reason, and above nothing: it is not the deadline.
+            slack.UPLOADS_WITHIN + slack.ENDING_WITHIN + self.MARGIN, answering.LANDS_WITHIN,
+            f"the Slack adapter gives one delivery {slack.UPLOADS_WITHIN:g}s of file work and up "
+            f"to {slack.ENDING_WITHIN:g}s more to end an upload it gave up on, while rundesk waits "
+            f"{answering.LANDS_WITHIN:g}s for its answer — a `failed` record written after that "
+            f"wait is read by nothing, and the turn keeps its completion mark")
+        # The socket ceiling bounds one request of an upload. It sits under the budget for the same
+        # reason, and above nothing: it is not the deadline.
         self.assertLess(slack.AN_UPLOAD_WITHIN, slack.UPLOADS_WITHIN)
 
 

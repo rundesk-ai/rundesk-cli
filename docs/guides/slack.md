@@ -335,7 +335,7 @@ for the whole of what Rundesk does with a declaration.
 | bytes per file | 32 MiB |
 | what is uploaded | the bytes this adapter re-opened and verified, never the path |
 | where it lands | the answer's own channel and thread — including when the answer was long enough to be split and the files ride on its last piece |
-| how long one answer has to get its files up | 8 seconds from the moment the answer is taken up |
+| how long one answer has to get its files up | 7 seconds from the moment the answer is taken up |
 | incoming files | landed with the message that brought them — up to 10 of 32 MiB, under the channel's dated `in/` directory, the same place a fetched one goes |
 
 **Every file is verified again, immediately before its own upload.** The adapter re-opens the path
@@ -357,16 +357,22 @@ in the conversation, so an answer nobody can see is never an answer nobody hears
 **An answer has a few seconds to get its files up, and says so when it does not.** Rundesk waits a
 bounded moment to hear what became of a delivery and settles the turn the instant that wait ends, so
 uploads that ran on past it would answer into nothing — and a completion mark would stand over an
-answer whose file never went. So one answer has 8 seconds from the moment it is taken up to get its
-files up — the message it posts first is spent out of the same 8 — and an upload still running at the
-end of it is given up on. A file given up on, and a file there was no time left to begin, are both
-named the way a file that failed is named: `Could not attach: preview.png.`
+answer whose file never went. So one answer has 7 seconds from the moment it is taken up to get its
+files up — the message it posts first is spent out of the same 7 — and an upload still running at the
+end of it is given up on. The rest of the wait is what ending that upload is allowed to take, which
+is why the number is 7 rather than the whole of it. A file given up on, and a file there was no time
+left to begin, are both named the way a file that failed is named: `Could not attach: preview.png.`
 
-**A file given up on is not cancelled, so it may still arrive afterwards** — Slack may finish an
-upload Rundesk has stopped waiting for, and it would then appear with no line beside it. What the
-agent reports is what it knows at the deadline, which is that the file did not go; calling something
-still in flight a success is the alternative, and that cannot be told from a file that arrived. A
-large file on a slow link is the case this costs.
+**A file given up on is ended rather than abandoned.** Each upload runs in a process of its own, and
+at the deadline that process is stopped — so nothing of it goes on running, and Slack shares a file
+only in the last request of the exchange, which an upload stopped before it never reaches. A large
+file on a slow link is the case this costs: it does not go, and the answer says so.
+
+**One race is left, and it is small.** The upload can be stopped in the moment after Slack accepted
+that last request and before its answer was read, and an acceptance nobody heard cannot be told from
+one that never happened. So what the agent reports is still what it knows at the deadline — that the
+file did not go — and in that one case the file may appear with no line beside it. Reporting the
+opposite would put a completion mark over an answer whose file may be missing, which is worse.
 
 **This needs `files:write`, which the manifest asks for.** An app installed before this release does
 not have it: `rundesk channels doctor <agent>` names it, and the fix is

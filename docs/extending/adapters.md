@@ -93,6 +93,11 @@ request for its capabilities would answer a question nobody asked and look as th
 Anything that is not one of the five: say so on stderr and exit non-zero — which is also how an
 adapter written before `search` existed behaves correctly without being touched.
 
+**A word of your own is yours, and rundesk will never say it.** An adapter may run itself under one
+— `src/channels/slack` runs `upload` to put one file up where a deadline can end it — and that is
+still an exact match rather than a search. It appears in no capability and in nothing rundesk reads,
+so it is not part of this contract and nothing here waits on it.
+
 **The last two are the agent's, and none of the first three are.** `--capabilities` and `--check` are
 asked while somebody is at a terminal connecting a channel, and `serve` is what a gateway hosts.
 `search` and `fetch` are asked in the middle of a turn, by the agent itself, of a channel that is

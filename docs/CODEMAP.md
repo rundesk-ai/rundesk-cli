@@ -59,7 +59,8 @@ agent steps run from `0001_the_records_an_agent_keeps` to
 Executables with a shebang and no `.py`, run as separate programs exchanging newline-delimited JSON.
 Being extensionless is why a directory-scanning lint does not see them. A channel adapter answers
 five invocations: `--capabilities`, `--check` and `serve` for the owner and the gateway, and `search`
-and `fetch` for the agent itself.
+and `fetch` for the agent itself. One of them answers a sixth nobody else says: `src/channels/slack`
+runs itself as `upload`, because a file has a deadline and only a process can be held to one.
 
 - `src/channels/` — `discord`, `slack`
 - `src/providers/` — `codex`, `claude`, `grok`, `antigravity`

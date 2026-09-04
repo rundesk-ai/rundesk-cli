@@ -31,12 +31,13 @@ import io
 import json
 import os
 import shutil
+import sys
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional, Tuple
 from unittest import mock
 
 #: The adapter is an executable with a shebang and no `.py`, so it is loaded by path rather than
@@ -125,8 +126,8 @@ class Web:
 
     def __init__(self, **named: Any) -> None:
         self.token = named.get("token", "")
-        #: The ceiling this client was built with. Uploads get one of their own, so a delivery's
-        #: whole file phase can stay inside the moment rundesk waits for its terminal record.
+        #: The ceiling this client was built with. An upload builds one of its own, in its own
+        #: process, under a shorter ceiling — see `TheUploadItself`.
         self.timeout = named.get("timeout")
         #: Every call this and the socket made, in one list, so *order* is assertable. An
         #: acknowledgement that arrives is not an acknowledgement that arrived first, and the
@@ -497,6 +498,49 @@ def a_slack_file(nth: int = 0, name: str = "plan.pdf", size: Optional[int] = 3,
     return one
 
 
+#: The real thing `reaching` stands in for below, kept so a case about the deadline can put it
+#: back. Taken at import, before any case has replaced it.
+AN_UPLOAD = adapter.an_upload
+
+
+class Uploads:
+    """Every upload a delivery asked for, and what became of each.
+
+    **The seam is a process, so this stands in for the call that runs one** (R-SLK-49, R-SLK-67).
+    Production hands one file to `an_upload`, which runs it where a deadline can end it and brings
+    back one record; what the vendor client is then asked for is proved on the other side of that
+    seam, in `TheUploadItself`. A case that needs the real thing puts `AN_UPLOAD` back.
+    """
+
+    def __init__(self, timeline: List[str]) -> None:
+        self.asked: List[Dict[str, Any]] = []
+        #: The same list the platform calls go into, so *which came first* still covers both.
+        self.timeline = timeline
+        #: A refusal to answer with instead of uploading, as `slack_sdk` would raise one.
+        self.refuses: Optional[Exception] = None
+        #: A clock to advance and by how much, so a budget is spent rather than waited out.
+        self.spending: Optional[Any] = None
+        #: The whole record to answer with, for a case about what the delivery makes of one.
+        self.answering: Optional[Dict[str, Any]] = None
+
+    def __call__(self, filename: str, blob: bytes, channel: str, thread: str,
+                 within: float) -> Dict[str, Any]:
+        self.timeline.append("files_upload_v2")
+        self.asked.append({"filename": filename, "content": blob, "channel": channel,
+                           "thread_ts": thread, "within": within})
+        if self.spending is not None:
+            clock, seconds = self.spending
+            clock.tick(seconds)
+        if self.answering is not None:
+            return dict(self.answering)
+        if self.refuses is None:
+            return {"ok": True}
+        # The same two facts the real upload carries back, taken the same way it takes them: the
+        # sentence a person reads, and Slack's own word for whichever refusals end the adapter.
+        return {"ok": False, "why": adapter._why_slack_refused(self.refuses),
+                "slack": adapter._slack_said(self.refuses)}
+
+
 class Wired(unittest.TestCase):
     """Everything a case needs: the vendor globals bound, and the records the adapter wrote."""
 
@@ -514,10 +558,11 @@ class Wired(unittest.TestCase):
         """A connection wired to a stand-in, already signed in, ready to be told things."""
         one = adapter.Reaching([THEM] if allow is None else allow, list(places or []))
         one.web = Web(token="xoxb-x")
-        # The same recorder under both names, so *what was called* stays one list while production
-        # keeps two clients with two ceilings — see
-        # `test_uploads_are_built_under_their_own_socket_ceiling`.
-        one.uploads = one.web
+        # Uploads run in a process of their own, so what a case reads about one is the request that
+        # crossed to it rather than a call on this client — see `Uploads`.
+        one.uploading = Uploads(one.web.timeline)
+        self.addCleanup(setattr, adapter, "an_upload", adapter.an_upload)
+        adapter.an_upload = one.uploading
         one.socket = Socket(app_token="xapp-x")
         one.socket.timeline = one.web.timeline
         Webhook.timeline = one.web.timeline
@@ -537,6 +582,10 @@ class Wired(unittest.TestCase):
         with contextlib.redirect_stdout(caught), contextlib.redirect_stderr(errors):
             doing()
         return [json.loads(line) for line in caught.getvalue().splitlines() if line.strip()]
+
+    def uploaded(self, one: Any) -> List[Dict[str, Any]]:
+        """Every upload this delivery asked for, as the request that crossed to its own process."""
+        return one.uploading.asked
 
     def envelope(self, one: Any, event: Dict[str, Any], **named: Any) -> List[Dict[str, Any]]:
         request = Envelope(event, **named)
@@ -2456,7 +2505,7 @@ class OneDirectConversation(Wired):
         self.delivered(one, adapter.conversation_of(TEAM, DM), reply_to="1700.000100",
                        files=[{"name": at.name, "at": str(at), "bytes": 6,
                                "sha256": hashlib.sha256(b"pixels").hexdigest()}])
-        self.assertEqual(one.web.made("files_upload_v2")[0]["thread_ts"], "1700.000100")
+        self.assertEqual(self.uploaded(one)[0]["thread_ts"], "1700.000100")
 
     # -- a split answer, which is what rundesk really sends --------------------------------
 
@@ -2496,7 +2545,7 @@ class OneDirectConversation(Wired):
         self.pieces(one, adapter.conversation_of(TEAM, DM),
                     {"text": "the first half", "reply_to": "1700.000100"},
                     {"text": "and the second", "files": [approved]})
-        self.assertEqual(one.web.made("files_upload_v2")[0]["thread_ts"], "1700.000100")
+        self.assertEqual(self.uploaded(one)[0]["thread_ts"], "1700.000100")
         self.assertEqual({made["thread_ts"] for made in one.web.made("chat_postMessage")},
                          {"1700.000100"})
 
@@ -2658,9 +2707,6 @@ class SendingAFileOut(Wired):
                    "text": text}, **also)
         return self.during(lambda: one._deliver(it))
 
-    def uploaded(self, one: Any) -> List[Dict[str, Any]]:
-        return one.web.made("files_upload_v2")
-
     def posted(self, one: Any) -> List[Dict[str, Any]]:
         return one.web.made("chat_postMessage")
 
@@ -2677,18 +2723,6 @@ class SendingAFileOut(Wired):
         self.assertEqual(made[0]["content"], self.PIXELS)
         self.assertEqual(made[0]["filename"], "preview.png")
         self.assertEqual(self.only(records, "delivered")["id"], "1754431200.123456-0-7")
-
-    def test_the_current_upload_path_is_the_one_used_and_the_retired_one_is_not(self) -> None:
-        # `files.upload` is retired. Named here rather than left to a reader of the source, because
-        # a call that Slack has withdrawn fails only in a real workspace.
-        one = self.reaching()
-        self.delivering(one, files=[self.approved(self.a_file())])
-        self.assertEqual([call["method"] for call in one.web.calls
-                          if "files" in call["method"]], ["files_upload_v2"])
-        source = ADAPTER.read_text(encoding="utf-8")
-        for retired in ("files_upload(", "files.upload\"", "files.upload'"):
-            with self.subTest(retired):
-                self.assertNotIn(retired, source)
 
     def test_the_words_are_posted_before_the_file_goes_up(self) -> None:
         # Slack has no call carrying both, so the answer is a message and the file is an upload —
@@ -2714,7 +2748,10 @@ class SendingAFileOut(Wired):
                         files=[self.approved(self.a_file())])
         made = self.uploaded(one)[0]
         self.assertEqual(made["channel"], DM)
-        self.assertNotIn("thread_ts", made)
+        # No thread, because a direct conversation carries none — and an empty one is not sent to
+        # Slack at all, which is proved where the vendor call is made: see
+        # `test_a_thread_is_named_only_where_the_answer_stood_in_one`.
+        self.assertEqual(made["thread_ts"], "")
         self.assertEqual(self.posted(one)[0]["channel"], DM)
 
     def test_every_file_of_a_delivery_goes_up_in_the_order_it_was_given(self) -> None:
@@ -2976,13 +3013,7 @@ class SendingAFileOut(Wired):
 
     def spent_uploading(self, one: Any, clock: Ticking, seconds: float) -> None:
         """Make each upload take that long, out of the same budget."""
-        uploading = one.uploads.files_upload_v2
-
-        def slowly(**named: Any) -> Any:
-            clock.tick(seconds)
-            return uploading(**named)
-
-        one.uploads.files_upload_v2 = slowly
+        one.uploading.spending = (clock, seconds)
 
     def test_a_delivery_stops_beginning_uploads_once_its_budget_is_spent(self) -> None:
         """R-SLK-49. Rundesk waits a bounded moment for a terminal record and reads what became of
@@ -3031,26 +3062,46 @@ class SendingAFileOut(Wired):
         self.delivering(one, files=files)
         self.assertEqual(len(self.uploaded(one)), 3)
 
+    #: An upload that cannot answer inside any budget a case here sets, written as the program it
+    #: really is. **Two marks and a sleep between them**: the first says which process was started,
+    #: and the second is written only after the sleep — so it is there exactly when something let
+    #: the upload run on, which is the file that used to appear in a conversation minutes after the
+    #: answer above it had already reported losing it.
+    OUTLASTS_ANY_BUDGET = (
+        "import json, os, sys, time\n"
+        "open(sys.argv[1], 'w').write(str(os.getpid()))\n"
+        "time.sleep(float(sys.argv[3]))\n"
+        "open(sys.argv[2], 'w').write('shared')\n"
+        "sys.stdout.write(json.dumps({'ok': True}) + '\\n')\n"
+    )
+
+    def an_upload_that_outlasts_it(self, taking: float = 0.6) -> Tuple[Path, Path]:
+        """Make every upload a real process that cannot answer in time. Says where its marks go.
+
+        **The real `an_upload` and a stand-in program**, rather than the other way round: what is
+        being proved is the waiting, the kill and the reaping, and all three of them are in the code
+        this puts back. What the process does is the only part a case has to arrange.
+        """
+        held = tempfile.TemporaryDirectory()
+        self.addCleanup(held.cleanup)
+        running, shared = Path(held.name) / "pid", Path(held.name) / "shared"
+        self.addCleanup(setattr, adapter, "an_upload_command", adapter.an_upload_command)
+        self.addCleanup(setattr, adapter, "an_upload", adapter.an_upload)
+        adapter.an_upload = AN_UPLOAD
+        adapter.an_upload_command = lambda: [sys.executable, "-c", self.OUTLASTS_ANY_BUDGET,
+                                             str(running), str(shared), str(taking)]
+        return running, shared
+
     def test_a_running_upload_is_given_up_on_at_the_deadline(self) -> None:
         """R-SLK-49. The defect this closes: the budget bounded when an upload *started* and nothing
         bounded how long it ran, so one slow file answered after rundesk had stopped listening and
         a completion mark stood over an answer whose file never went.
 
-        **Measured on the real clock**, because a deadline enforced by waiting is not something an
-        injected clock can see: `Thread.join` takes its timeout from the C clock, and a case that
-        patched `time.monotonic` would prove the arithmetic and miss the wait.
+        **Measured on the real clock**, because a deadline enforced by waiting on something is not
+        arithmetic an injected clock can see.
         """
         one = self.reaching()
-        released = threading.Event()
-        self.addCleanup(released.set)
-
-        def slowly(**named: Any) -> Any:
-            # Bounded rather than endless, so an implementation with no deadline fails this case
-            # instead of hanging the suite inside it.
-            released.wait(3.0)
-            return Answered({"ok": True})
-
-        one.uploads.files_upload_v2 = slowly
+        self.an_upload_that_outlasts_it()
         with mock.patch.object(adapter, "UPLOADS_WITHIN", 0.2):
             began = time.monotonic()
             records = self.delivering(one, files=[self.approved(self.a_file())])
@@ -3059,11 +3110,94 @@ class SendingAFileOut(Wired):
         failed = self.only(records, "failed")
         self.assertIn("preview.png", failed["why"])
         self.assertIn("given up on", self.note(records, "could not attach")["text"])
-        # The worker is left running and cannot be cancelled, so what bounds the cost is that it
-        # can never hold this process open — see `_uploading`, which says so out loud.
-        left = [one for one in threading.enumerate() if one.name == "uploading"]
-        self.assertTrue(left and left[0].daemon,
-                        "an upload given up on was not left on a daemon worker")
+
+    def test_an_upload_given_up_on_is_ended_rather_than_left_running(self) -> None:
+        """R-SLK-67. The defect this closes: an upload past the deadline was walked away from and
+        went on running — holding this process's memory and a connection for as long as the platform
+        took, on a machine whose adapter runs for weeks.
+
+        **The process is asked about rather than the code**: after the delivery has answered, the
+        upload it started is not there to signal.
+        """
+        one = self.reaching()
+        running, _shared = self.an_upload_that_outlasts_it()
+        with mock.patch.object(adapter, "UPLOADS_WITHIN", 0.2):
+            self.delivering(one, files=[self.approved(self.a_file())])
+        started = int(running.read_text(encoding="utf-8"))
+        with self.assertRaises(ProcessLookupError):
+            # Reaped as well as killed, or this would find a zombie and say it was still there.
+            os.kill(started, 0)
+
+    def test_a_file_given_up_on_never_arrives_after_the_answer_said_it_had_not(self) -> None:
+        """R-SLK-67. What a person saw: a file appearing in the conversation under an answer that
+        had already said it could not attach it, with no line beside it — because an upload given up
+        on used to go on and Slack completed it.
+
+        **Waited past when it would have arrived**, so a build that only stopped waiting fails here
+        rather than passing on a race.
+        """
+        one = self.reaching()
+        _running, shared = self.an_upload_that_outlasts_it(taking=0.4)
+        with mock.patch.object(adapter, "UPLOADS_WITHIN", 0.1):
+            records = self.delivering(one, files=[self.approved(self.a_file())])
+        self.only(records, "failed")
+        time.sleep(1.0)
+        self.assertFalse(shared.exists(),
+                         "a file given up on was shared into the conversation afterwards")
+
+    def test_an_upload_given_up_on_leaves_the_event_path_as_it_found_it(self) -> None:
+        """**Compatibility, not a regression.** This holds on the code before uploads moved into a
+        process of their own, and holding it afterwards is the whole point: moving work off this
+        program could as easily have moved something onto it, and a change that never asked would
+        not have noticed. So the next envelope is acknowledged inside Slack's three seconds and
+        reported, immediately after a delivery gave up on a file.
+
+        **It is not evidence about what was reported in production.** A channel that stopped
+        answering until its gateway was restarted is a symptom whose cause is not established — see
+        the open question in `docs/requirements/channel-slack.md`. Nothing here reproduces that, and
+        nothing here rules it out either.
+        """
+        one = self.reaching()
+        self.an_upload_that_outlasts_it()
+        with mock.patch.object(adapter, "UPLOADS_WITHIN", 0.2):
+            self.delivering(one, files=[self.approved(self.a_file())])
+        one.web.timeline.clear()
+        records = self.envelope(one, a_direct(text="and the next question?"))
+        self.assertEqual(one.web.timeline[0], "acknowledged")
+        self.assertEqual(self.only(records, "arrived")["text"], "and the next question?")
+
+    # -- what refused it, and which side of the seam that was -------------------------------
+
+    def test_a_refusal_carrying_slacks_own_word_is_reported_as_slacks(self) -> None:
+        """R-SLK-49. Slack was asked and said no, so the sentence names Slack — and the word it
+        used is what the rule about ending this adapter reads."""
+        one = self.reaching()
+        one.uploading.refuses = Refused("no", Answered({"error": "file_uploads_disabled"}))
+        records = self.delivering(one, files=[self.approved(self.a_file())])
+        said = self.note(records, "could not attach")["text"]
+        self.assertIn("Slack would not take it: Slack answered file_uploads_disabled", said)
+        self.only(records, "failed")
+
+    def test_a_failure_on_this_side_never_says_slack_would_not_take_it(self) -> None:
+        """R-SLK-67. A library that is not installed, a token that never reached the upload, a
+        request it could not read and a process that exited saying nothing are all *this side*
+        failing. Naming Slack for one of them sends whoever reads it to look in a workspace where
+        nothing happened — and none of them is a credential refusal, so none of them ends the
+        adapter either."""
+        for why in ("slack_sdk is not installed for the interpreter running this adapter",
+                    "no bot token reached this upload, so nothing was sent",
+                    "the upload request could not be read: it declared no length to read",
+                    "the upload ended (-9) without saying what became of it"):
+            with self.subTest(why):
+                one = self.reaching()
+                one.uploading.answering = {"ok": False, "why": why}
+                records = self.delivering(one, files=[self.approved(self.a_file())])
+                said = self.note(records, "could not attach")["text"]
+                self.assertIn(f"the upload could not be made: {why}", said)
+                self.assertNotIn("Slack would not take it", said)
+                self.only(records, "failed")
+                self.assertFalse(one.unrecoverable)
+                self.assertFalse(one.stopping.is_set())
 
     def test_the_record_that_settles_the_turn_is_written_before_the_line_about_it(self) -> None:
         """R-SLK-49. The line is a courtesy nothing waits on and the record is what the turn is
@@ -3080,8 +3214,7 @@ class SendingAFileOut(Wired):
 
     def test_slack_refusing_an_upload_is_reported_and_the_words_still_stand(self) -> None:
         one = self.reaching()
-        one.web.refuses["files_upload_v2"] = Refused(
-            "no", Answered({"error": "file_uploads_disabled"}))
+        one.uploading.refuses = Refused("no", Answered({"error": "file_uploads_disabled"}))
         records = self.delivering(one, files=[self.approved(self.a_file())])
         self.assertIn("file_uploads_disabled", self.note(records, "could not attach")["text"])
         self.assertEqual([made["text"] for made in self.posted(one)],
@@ -3092,8 +3225,7 @@ class SendingAFileOut(Wired):
         # The same rule every other call here follows: only the words that say the credential
         # itself is gone end the adapter, and one refused upload is not one of them.
         one = self.reaching()
-        one.web.refuses["files_upload_v2"] = Refused(
-            "no", Answered({"error": "token_revoked"}))
+        one.uploading.refuses = Refused("no", Answered({"error": "token_revoked"}))
         self.delivering(one, files=[self.approved(self.a_file())])
         self.assertTrue(one.unrecoverable)
         self.assertTrue(one.stopping.is_set())
@@ -3580,33 +3712,252 @@ class TheCommandItOffers(Wired):
 # ---------------------------------------------------------------------------------------------
 
 
-class TheConnection(Wired):
-    """`ready` and `gone` are how somebody tells a quiet agent from a deaf one."""
+class TheUploadItself(Wired):
+    """The other side of the seam: one file, one process, and the one record it writes.
 
-    def test_uploads_are_built_under_their_own_socket_ceiling(self) -> None:
+    **This is where the vendor call is proved** (R-SLK-47, R-SLK-67). A delivery hands a file to
+    `an_upload` and reads a record back; what Slack is actually asked for happens in the process
+    that call starts, so it is driven here directly — the request on standard input, and the answer
+    on standard output, which is the whole of what crosses.
+    """
+
+    def asking(self, blob: bytes = b"pixels", **also: Any) -> Any:
+        """Put one upload request on standard input, the way `an_upload` writes one."""
+        asked = dict({"filename": "preview.png", "channel": ROOM, "thread_ts": "",
+                      "bytes": len(blob), "within": 5.0}, **also)
+        return io.BytesIO(json.dumps(asked).encode("utf-8") + b"\n" + blob)
+
+    def uploading(self, blob: bytes = b"pixels", client: Optional[Web] = None,
+                  **also: Any) -> List[Dict[str, Any]]:
+        """Run one upload with a stand-in Slack behind it, and hand back what it said."""
+        made = client if client is not None else Web(token="xoxb-x")
+        standing = type("Standing", (), {"buffer": self.asking(blob, **also)})()
+        with mock.patch.dict(os.environ, {adapter.BOT_TOKEN_FROM: "xoxb-x",
+                                          adapter.APP_TOKEN_FROM: "xapp-x"}), \
+                mock.patch.object(adapter, "WebClient", lambda **named: made), \
+                mock.patch.object(adapter.sys, "stdin", standing):
+            return self.during(adapter.uploading)
+
+    def test_the_current_upload_path_is_the_one_used_and_the_retired_one_is_not(self) -> None:
+        # `files.upload` is retired. Named here rather than left to a reader of the source, because
+        # a call that Slack has withdrawn fails only in a real workspace.
+        made = Web(token="xoxb-x")
+        self.uploading(client=made)
+        self.assertEqual([call["method"] for call in made.calls if "files" in call["method"]],
+                         ["files_upload_v2"])
+        source = ADAPTER.read_text(encoding="utf-8")
+        for retired in ("files_upload(", "files.upload\"", "files.upload'"):
+            with self.subTest(retired):
+                self.assertNotIn(retired, source)
+
+    def test_an_upload_puts_up_the_bytes_it_was_handed_where_it_was_told(self) -> None:
+        """R-SLK-47, R-SLK-48. The snapshot the delivery verified is what crosses, and it crosses
+        as bytes — so nothing on the far side of this seam ever holds a path to open again."""
+        made = Web(token="xoxb-x")
+        records = self.uploading(b"exactly these", client=made, filename="chart.png", channel=DM)
+        asked = made.made("files_upload_v2")[0]
+        self.assertEqual(asked["content"], b"exactly these")
+        self.assertEqual(asked["filename"], "chart.png")
+        self.assertEqual(asked["channel"], DM)
+        self.assertEqual(records, [{"ok": True}])
+
+    def test_a_thread_is_named_only_where_the_answer_stood_in_one(self) -> None:
+        """R-SLK-47. A direct conversation carries no thread, and an empty one is not a thread to
+        share into — so it is left out rather than sent as a value Slack would have to read."""
+        flat, threaded = Web(token="xoxb-x"), Web(token="xoxb-x")
+        self.uploading(client=flat)
+        self.uploading(client=threaded, thread_ts="1700.000100")
+        self.assertNotIn("thread_ts", flat.made("files_upload_v2")[0])
+        self.assertEqual(threaded.made("files_upload_v2")[0]["thread_ts"], "1700.000100")
+
+    def test_an_upload_is_built_under_its_own_socket_ceiling(self) -> None:
         """One client cannot carry both bounds: a call a person is not waiting behind may block for
         `CALL_WITHIN`, and a socket operation inside an upload may not.
 
-        **This proves the ceiling and not the deadline.** What bounds an upload the delivery has
-        stopped waiting for is this number; what bounds the delivery is the wait itself, which
-        `test_a_running_upload_is_given_up_on_at_the_deadline` is the check for.
+        **This proves the ceiling and not the deadline.** What bounds one request of an upload is
+        this number; what bounds the upload is the delivery ending it, which
+        `test_an_upload_given_up_on_is_ended_rather_than_left_running` is the check for.
         """
-        one = adapter.Reaching([THEM], [])
-        one.stopping.set()
-        built = []
+        built: List[Web] = []
 
         def building(**named: Any) -> Web:
-            made = Web(**named)
-            built.append(made)
-            return made
+            built.append(Web(**named))
+            return built[-1]
 
-        with mock.patch.object(adapter, "WebClient", building), \
-                mock.patch.object(adapter, "SocketModeClient", lambda **named: Socket()), \
-                mock.patch.object(adapter, "rundesk_says", lambda *_: iter(())):
-            self.during(lambda: one.run("xoxb-x", "xapp-x"))
-        self.assertEqual(one.web.timeout, adapter.CALL_WITHIN)
-        self.assertEqual(one.uploads.timeout, adapter.AN_UPLOAD_WITHIN)
+        standing = type("Standing", (), {"buffer": self.asking()})()
+        with mock.patch.dict(os.environ, {adapter.BOT_TOKEN_FROM: "xoxb-x"}), \
+                mock.patch.object(adapter, "WebClient", building), \
+                mock.patch.object(adapter.sys, "stdin", standing):
+            self.during(adapter.uploading)
+        self.assertEqual([one.timeout for one in built], [adapter.AN_UPLOAD_WITHIN])
         self.assertLess(adapter.AN_UPLOAD_WITHIN, adapter.CALL_WITHIN)
+
+    def test_an_upload_says_the_word_slack_refused_it_with(self) -> None:
+        """R-SLK-49. Which refusals end the whole adapter is decided in one place, on the delivery's
+        own thread — so what crosses back is Slack's own word for this one, not a decision."""
+        made = Web(token="xoxb-x")
+        made.refuses["files_upload_v2"] = Refused("no", Answered({"error": "token_revoked"}))
+        said = self.uploading(client=made)[0]
+        self.assertFalse(said["ok"])
+        self.assertEqual(said["slack"], "token_revoked")
+        self.assertIn("token_revoked", said["why"])
+
+    def test_an_upload_that_was_promised_more_bytes_than_arrived_uploads_nothing(self) -> None:
+        """A truncated request is a file nobody can prove, and half of one is worse than none."""
+        standing = type("Standing", (), {"buffer": self.asking(b"six!!!", bytes=99)})()
+        made = Web(token="xoxb-x")
+        with mock.patch.dict(os.environ, {adapter.BOT_TOKEN_FROM: "xoxb-x"}), \
+                mock.patch.object(adapter, "WebClient", lambda **named: made), \
+                mock.patch.object(adapter.sys, "stdin", standing):
+            said = self.during(adapter.uploading)[0]
+        self.assertFalse(said["ok"])
+        self.assertEqual(made.calls, [])
+
+    #: A program that reads the request with the adapter's own reader and says what it made of
+    #: it. **Both halves are the real ones**: `an_upload` writes the frame and `_an_upload_asked`
+    #: reads it, so a case here fails if either side ever changes without the other.
+    READS_THE_FRAME = (
+        "import hashlib, importlib.machinery, importlib.util, json, sys\n"
+        "loader = importlib.machinery.SourceFileLoader('slack_for_the_frame', sys.argv[1])\n"
+        "spec = importlib.util.spec_from_loader(loader.name, loader)\n"
+        "module = importlib.util.module_from_spec(spec)\n"
+        "loader.exec_module(module)\n"
+        "asked, blob = module._an_upload_asked(sys.stdin.buffer)\n"
+        "sys.stdout.write(json.dumps({'ok': True, 'read': asked, 'held': len(blob),\n"
+        "                             'digest': hashlib.sha256(blob).hexdigest()}) + '\\n')\n"
+    )
+
+    def test_a_request_this_wrote_is_a_request_this_reads(self) -> None:
+        """The frame is one program writing and another reading, so it is proved end to end rather
+        than on either side's own account of it.
+
+        **Bytes chosen to break a careless frame**: a newline, so a reader that took the rest of the
+        line as the file would stop early; a NUL and an invalid UTF-8 pair, so one that decoded the
+        body would corrupt it; and a length that says where the bytes end, because a pipe hands over
+        whatever has arrived rather than everything that was sent.
+        """
+        blob = b"first\nsecond\x00\xff\xfe tail"
+        self.addCleanup(setattr, adapter, "an_upload_command", adapter.an_upload_command)
+        adapter.an_upload_command = lambda: [sys.executable, "-c", self.READS_THE_FRAME,
+                                             str(ADAPTER)]
+        said = adapter.an_upload("a b.png", blob, DM, "1700.000100", 20.0)
+        self.assertTrue(said["ok"], said)
+        self.assertEqual(said["held"], len(blob))
+        self.assertEqual(said["digest"], hashlib.sha256(blob).hexdigest())
+        self.assertEqual(said["read"], {"filename": "a b.png", "channel": DM,
+                                        "thread_ts": "1700.000100", "bytes": len(blob),
+                                        "within": 20.0})
+
+    def test_an_upload_that_fails_while_it_is_alive_is_ended_before_anything_is_decided(self) -> None:
+        """R-SLK-67. A broken pipe is not a deadline, and it still leaves a process running. Every
+        way out of the wait ends the upload, or the thing this change exists to prevent comes back
+        through the one door nobody was watching."""
+        ended: Dict[str, Any] = {"killed": False, "closed": 0}
+
+        class Stream:
+            def close(inner) -> None:
+                ended["closed"] += 1
+
+        class Falls:
+            returncode = None
+
+            def __init__(inner, *_args: Any, **_named: Any) -> None:
+                inner.stdin = inner.stdout = inner.stderr = Stream()
+
+            def communicate(inner, *_args: Any, **_named: Any) -> Any:
+                raise OSError(32, "Broken pipe")
+
+            def kill(inner) -> None:
+                ended["killed"] = True
+
+            def wait(inner, timeout: Optional[float] = None) -> int:
+                # Bounded by whoever calls it, and this records that one did rather than sleeping.
+                ended["waited"] = timeout
+                return -9
+
+        with mock.patch.object(adapter.subprocess, "Popen", Falls):
+            said = adapter.an_upload("preview.png", b"pixels", ROOM, "", 5.0)
+        self.assertTrue(ended["killed"], "an upload that failed mid-flight was left running")
+        self.assertEqual(ended["closed"], 3)
+        # Bounded by what is left of the cleanup's one allowance rather than by a fresh one, which
+        # is `test_ending_an_upload_is_one_allowance_shared_and_not_one_for_each_step`'s subject.
+        self.assertTrue(0.0 <= ended["waited"] <= adapter.ENDING_WITHIN, ended["waited"])
+        self.assertFalse(said["ok"])
+        self.assertNotIn("slack", said)
+        self.assertIn("the upload could not be carried out", said["why"])
+
+    def test_ending_an_upload_is_one_allowance_shared_and_not_one_for_each_step(self) -> None:
+        """R-SLK-67. Cleanup runs with a delivery waiting to write the record that settles its turn,
+        so what has to hold is the whole of it: `ENDING_WITHIN` is added into rundesk's wait exactly
+        once — see `tests/test_providers_answering.py` — and two steps each given a fresh one would
+        spend twice the number that was added up.
+
+        **The clock is injected rather than waited out**, because what is being checked is the
+        arithmetic of the allowance and not how long a machine takes. Every step is made to spend
+        some of it — ending the process a little, reaping it the rest — so each one is asked for
+        what is left rather than for the whole number again, and the last is asked for nothing.
+        """
+        clock = Ticking()
+        given: Dict[str, Any] = {"communicate": [], "waited": "never"}
+
+        class Lingers:
+            returncode = None
+            #: What ending it costs, so the step after that is asked for less than the whole.
+            KILL_TAKES = 0.5
+
+            def __init__(inner, *_args: Any, **_named: Any) -> None:
+                inner.stdin = inner.stdout = inner.stderr = None
+
+            def communicate(inner, *_args: Any, **named: Any) -> Any:
+                allowed = named.get("timeout") or 0.0
+                given["communicate"].append(allowed)
+                if len(given["communicate"]) > 1:
+                    # The cleanup's own reap, spending every bit of what it was left.
+                    clock.tick(allowed)
+                raise adapter.subprocess.TimeoutExpired("an upload", allowed)
+
+            def kill(inner) -> None:
+                # Ending a process is not free, and what it costs comes out of the same allowance.
+                clock.tick(inner.KILL_TAKES)
+
+            def wait(inner, timeout: Optional[float] = None) -> int:
+                given["waited"] = timeout
+                return -9
+
+        real = adapter.time.monotonic
+        self.addCleanup(setattr, adapter.time, "monotonic", real)
+        adapter.time.monotonic = lambda: clock.now
+        with mock.patch.object(adapter.subprocess, "Popen", Lingers):
+            said = adapter.an_upload("preview.png", b"pixels", ROOM, "", 5.0)
+        self.assertTrue(said["given_up"])
+        # The delivery's own wait first, then the cleanup's — the allowance less what ending the
+        # process had already taken out of it.
+        self.assertEqual(given["communicate"], [5.0, adapter.ENDING_WITHIN - Lingers.KILL_TAKES])
+        self.assertEqual(given["waited"], 0.0,
+                         "the step after the reap was given an allowance of its own")
+
+    def test_an_upload_that_could_not_be_started_is_said_without_blaming_slack(self) -> None:
+        def refuses(*_args: Any, **_named: Any) -> Any:
+            raise OSError(2, "No such file or directory")
+
+        with mock.patch.object(adapter.subprocess, "Popen", refuses):
+            said = adapter.an_upload("preview.png", b"pixels", ROOM, "", 5.0)
+        self.assertFalse(said["ok"])
+        self.assertNotIn("slack", said)
+        self.assertIn("no process could be started to upload it", said["why"])
+
+    def test_no_credential_is_written_into_the_command_an_upload_is_started_with(self) -> None:
+        """R-SLK-59. A token in an argument list is a token every process on the machine can read.
+        The upload reads it the one way it is ever read, from the names rundesk sealed it into."""
+        command = adapter.an_upload_command()
+        self.assertEqual(command[1:], [str(ADAPTER.resolve()), "upload"])
+        for word in command:
+            self.assertNotIn("xoxb", word)
+            self.assertNotIn("xapp", word)
+
+
+class TheConnection(Wired):
+    """`ready` and `gone` are how somebody tells a quiet agent from a deaf one."""
 
     def test_run_does_not_mark_a_locally_opened_socket_ready(self) -> None:
         one = adapter.Reaching([THEM], [])
