@@ -108,6 +108,14 @@ inferred from their absence.
 Both terminal writes are conditional `UPDATE`s guarded on the row still being open, so a stop and an
 answer racing each other settle once and the loser is told.
 
+A returned result is settled only after the asking agent's turn durably records that it admitted
+the result message. The message claim is written just before the provider accepts it, so a gateway
+can end between those writes. While the claiming turn remains `working`, collection leaves the
+claim alone because that turn may still admit it. Once the claiming turn is terminal without the
+admission record, the next collection pass releases that exact claim and starts the ordinary
+fallback review turn. The result's stable external id reuses the same message rather than delivering
+another copy.
+
 **There is no attempt counter, and its absence is deliberate.** The turn row is written before the
 work starts and settled in a `finally` that survives the process being taken down, so a provider
 that could not start still leaves a turn that reached a terminal status. Work that was admitted and
@@ -121,6 +129,7 @@ then vanished is not a state this can be in.
 | `stopping` for longer than a beat | the answering gateway has not had its next pass yet, or the provider process group is still going down |
 | a steer seems ignored | the turn had already finished; the guidance stays for the next turn on the same delegation |
 | the target answered and the delegator did not notice | the *delegator's* gateway does the collecting, so that one must be running too |
+| the result was claimed just before the delegator's turn ended | the next collecting pass releases the terminal unadmitted claim and starts one fallback review turn |
 
 `rundesk asked show <id>` is what distinguishes the requested provider and model, the effective ones
 fixed at admission, and what the target's brain actually reported.

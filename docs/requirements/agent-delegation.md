@@ -1,7 +1,7 @@
 ---
 id: DEL
 name: One agent's ask of another, and the answer it returns
-last_verified: 2026-08-16
+last_verified: 2026-09-11
 ---
 
 ## What this is
@@ -36,7 +36,7 @@ it is not a claim that adjacent delegation behavior is absent.
 | ✅ | R-DEL-8 | An agent already in the delegation chain is refused, and an agent reached by delegation cannot delegate | `test_an_agent_may_not_hand_work_to_itself`, `test_a_turn_already_answering_a_delegation_may_not_hand_it_on`, `test_a_turn_answering_another_agent_is_shown_nobody` |
 | ❌ | R-DEL-9 | An agent answering a delegation cannot start a role run from that turn | The rebuilt CLI has no role-run command; tracked as stale scope by [#401](https://github.com/rundesk-ai/rundesk-cli/issues/401). |
 | ✅ | R-DEL-10 | Only the last complete message a delegation turn writes is returned, and an answered ask may still be carried on | `test_an_unattended_turn_delivers_only_its_last_complete_response`, `test_resume_keeps_a_pre_upgrade_delegations_original_conversation` |
-| ✅ | R-DEL-11 | Every answered delegation owes the asking agent exactly one review, delivered once | `test_the_first_call_delivers_and_the_second_does_not`, `test_an_external_parent_keeps_the_result_owed_until_a_review_turn_is_admitted`, `test_a_resumed_delegation_delivers_its_second_result_once` |
+| ✅ | R-DEL-11 | Every answered delegation owes the asking agent exactly one review, delivered once | `test_the_first_call_delivers_and_the_second_does_not`, `test_an_external_parent_keeps_the_result_owed_until_a_review_turn_is_admitted`, `test_a_terminal_unadmitted_result_claim_is_reoffered_and_settled_once`, `test_a_working_turn_keeps_its_unadmitted_result_claim`, `test_a_terminal_admitted_result_claim_is_not_reoffered`, `test_a_resumed_delegation_delivers_its_second_result_once` |
 | ❌ | R-DEL-12 | An answer that cannot be reviewed after a bounded number of attempts is settled and the owner told | There is no total attempt ceiling or owner notice; tracked by [#401](https://github.com/rundesk-ai/rundesk-cli/issues/401). |
 | ❌ | R-DEL-13 | A delegation nothing answered inside its window is settled and the asking agent told | There is no delegation expiry or deadline settlement; tracked by [#401](https://github.com/rundesk-ai/rundesk-cli/issues/401). |
 | ✅ | R-DEL-14 | Rundesk records an answering agent's words and asserts nothing read out of them | `test_the_reply_once_the_turn_is_terminal`, `test_the_answer_it_reviewed_is_what_it_was_answering`, `test_an_unattended_turn_delivers_only_its_last_complete_response` |

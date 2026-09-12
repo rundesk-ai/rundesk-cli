@@ -1116,7 +1116,18 @@ class OnADelegation(IntoAChannel):
             # A Words claim happens before its provider write. Only the durable admission record
             # proves that write succeeded; otherwise collection must leave the delegation owed
             # until this worker accepts it or releases it for a fallback turn.
-            return turns.admitted_message(agent, owning_turn, landed.message)
+            if turns.admitted_message(agent, owning_turn, landed.message):
+                return True
+            try:
+                if kept.get_turn(agent, owning_turn).get("turn_status") == kept.WORKING:
+                    return False
+                # A terminal turn can no longer admit a message it claimed before its provider
+                # write. Return that exact result to pending so the ordinary fallback path can
+                # reclaim the same de-duplicated row instead of leaving the delegation owed forever.
+                arriving.released_by_turn(
+                    agent, conversation, (landed.message,), owning_turn)
+            except (records.NotThere, records.Unreadable, OSError):
+                return False
         admitted = turns.Admission()
         threading.Thread(target=self._reviewed, name=f"review-{from_agent}",
                          args=(agent, conversation, said, from_agent, landed, admitted),
