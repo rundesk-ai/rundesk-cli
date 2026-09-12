@@ -55,6 +55,44 @@ class GuidingWorkingDelegation(support.Isolated):
             "bob", "ava", self.turn, "audit it")
         kept.made("ava", self.delegation, "bob", parent.conversation, self.turn)
 
+    def completed_answer(self, body="finished report"):
+        """A terminal target turn and the answer the delegator's collector will find."""
+        target_turn = provider_kept.add_turn("bob", {
+            "conversation_id": self.landed.conversation,
+            "provider_name": support.A_STAND_IN,
+            "access_mode": "work",
+        })
+        arriving.handled_by_turn(
+            "bob", self.landed.conversation, (self.landed.message,), target_turn)
+        arriving.said_by_agent(
+            "bob", kept.FROM_AGENT, kept.source_id_for("ava", self.turn), body,
+            turn=target_turn)
+        provider_kept.finish_turn("bob", target_turn, provider_kept.DONE)
+        return hosting._what_they_answered(
+            "bob", "ava", self.turn, self.delegation)
+
+    def claimed_review_result(self, answer, status, admitted=False):
+        """A durable result claimed by one parent turn before its provider write."""
+        said = answering.REVIEW.format(
+            agent="bob", answer=answer,
+            provenance=answering._delegation_provenance(answer))
+        landed = arriving.said_by_rundesk_into(
+            "ava", self.parent.conversation, said,
+            external_id=f"delegation-result:{self.delegation}:{answer.answer_id}")
+        owner = provider_kept.add_turn("ava", {
+            "conversation_id": self.parent.conversation,
+            "provider_name": support.A_STAND_IN,
+            "access_mode": "work",
+        })
+        arriving.handled_by_turn(
+            "ava", self.parent.conversation, (landed.message,), owner)
+        if admitted:
+            provider_kept.add_turn_record(
+                "ava", owner, turns.ADMITTED, {"messages": [landed.message]})
+        if status != provider_kept.WORKING:
+            provider_kept.finish_turn("ava", owner, status)
+        return landed, owner
+
     def guide(self):
         return self.rundesk("asked", "--agent", "ava", "say", self.delegation,
                             "include GUIDANCE=EMBER-284")
@@ -387,6 +425,59 @@ class GuidingWorkingDelegation(support.Isolated):
                   if one["author"] == arriving.BY_RUNDESK]
         self.assertEqual(1, len(result))
         self.assertIsNotNone(result[0]["turn_id"])
+
+    def test_a_terminal_unadmitted_result_claim_is_reoffered_and_settled_once(self):
+        answer = self.completed_answer()
+        stranded, old_turn = self.claimed_review_result(
+            answer, provider_kept.STOPPED)
+        reviews = answering.OnADelegation(directory.logs("ava"), _reaching_no_channel)
+
+        hosting._collected_what_came_back("ava", directory.where("ava"), reviews)
+
+        self.assertTrue(support.waited_until(
+            lambda: kept.one("ava", self.delegation).answered_at is not None
+            and provider_kept.list_turns("ava")[0]["ended_at"], 15))
+        result = [one for one in arriving.messages("ava", self.parent.conversation)
+                  if one["author"] == arriving.BY_RUNDESK]
+        self.assertEqual(1, len(result))
+        self.assertEqual(stranded.message, result[0]["id"])
+        self.assertNotEqual(old_turn, result[0]["turn_id"])
+        after = len(provider_kept.list_turns("ava"))
+
+        hosting._collected_what_came_back("ava", directory.where("ava"), reviews)
+
+        self.assertEqual(after, len(provider_kept.list_turns("ava")))
+        self.assertEqual(1, len([
+            one for one in arriving.messages("ava", self.parent.conversation)
+            if one["author"] == arriving.BY_RUNDESK]))
+
+    def test_a_working_turn_keeps_its_unadmitted_result_claim(self):
+        answer = self.completed_answer()
+        landed, working_turn = self.claimed_review_result(
+            answer, provider_kept.WORKING)
+        reviews = answering.OnADelegation(directory.logs("ava"), _reaching_no_channel)
+        before = len(provider_kept.list_turns("ava"))
+
+        hosting._collected_what_came_back("ava", directory.where("ava"), reviews)
+
+        self.assertIsNone(kept.one("ava", self.delegation).answered_at)
+        self.assertEqual(working_turn, arriving.turn_for_message(
+            "ava", self.parent.conversation, landed.message))
+        self.assertEqual(before, len(provider_kept.list_turns("ava")))
+
+    def test_a_terminal_admitted_result_claim_is_not_reoffered(self):
+        answer = self.completed_answer()
+        landed, admitted_turn = self.claimed_review_result(
+            answer, provider_kept.DONE, admitted=True)
+        reviews = answering.OnADelegation(directory.logs("ava"), _reaching_no_channel)
+        before = len(provider_kept.list_turns("ava"))
+
+        hosting._collected_what_came_back("ava", directory.where("ava"), reviews)
+
+        self.assertIsNotNone(kept.one("ava", self.delegation).answered_at)
+        self.assertEqual(admitted_turn, arriving.turn_for_message(
+            "ava", self.parent.conversation, landed.message))
+        self.assertEqual(before, len(provider_kept.list_turns("ava")))
 
     def test_a_requested_stop_settles_without_a_review_or_response_turn(self):
         with records.writing(directory.records("bob")) as conn:

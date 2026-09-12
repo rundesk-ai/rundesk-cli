@@ -98,6 +98,11 @@ wakes a review turn. What ava gets is bob's last complete message, verbatim and 
 summarises nothing and asserts nothing about it — and nothing bob wrote reaches any person until ava
 has reviewed it.
 
+Collection settles the delegation only after the asking turn durably admits that returned result.
+If a turn ends after claiming the result but before admission, the next gateway pass reoffers the
+same result message to one fallback review turn rather than leaving the delegation `working` or
+creating a duplicate.
+
 **Six things are refused**, each with what to type instead:
 
 | | |
