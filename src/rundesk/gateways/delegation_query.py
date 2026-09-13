@@ -10,12 +10,19 @@ No prompt or result crosses this seam. A named task contributes only its flatten
 provider-local records contribute only the public ``delegate`` lifecycle word, and result messages
 are queried without selecting their bodies. Every database connection below is opened by its owning
 module through ``records.reading``; this module has no write path and never starts a provider.
+
+One of those stores belongs to another agent, and it is the only optional read here: see
+``_task_brief``. Everything a conversation is entitled to know about its own delegated work stands
+in the records of the agent being asked, so a colleague's store nobody can open costs one identity
+rather than the whole answer.
 """
 
 import json
+import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
+from rundesk.agents import records
 from rundesk.channels import arriving, delivery
 from rundesk.core import config
 from rundesk.delegations import kept as delegations
@@ -136,9 +143,7 @@ def _named_agent(agent: str, kind: str, place: str, one: delegations.Delegation,
         target = (f"{kind}:{place}, turn {latest['id']}, {_provider(latest)} session"
                   + (" (replacement target)" if replaced else " (current target)"))
 
-    brief = arriving.delegation_brief(
-        one.to_agent, agent, one.parent_turn, one.delegation_id)
-    task = _task_identity(brief)
+    task = _task_identity(_task_brief(agent, one))
     timing = _timing(agent, one, state, now, review_turn)
     return Item(one.delegation_id, "named-agent", one.to_agent, task, state,
                 origin, target, timing)
@@ -201,6 +206,29 @@ def _local_records(agent: str, current: List[Dict[str, Any]], now: datetime) -> 
 def _visibility(provider: str) -> str:
     return (f"Provider-local visibility is partial for {_markdown(_provider_name(provider))}: "
             "only helper lifecycle events reported by the current provider session are shown.")
+
+
+def _task_brief(agent: str, one: delegations.Delegation) -> str:
+    """The target's own first task message, or ``""`` where its records cannot be read.
+
+    **The only read in this query that leaves the asking agent's own store, and the only optional
+    one.** A task identity is recognition: the asking agent's records already prove the work exists,
+    what state it is in and where its answer goes, and none of that needs the target's copy of the
+    brief. Leaving the target's store able to end the query turned two colleagues' unopenable
+    ``state.db`` into one generic failure for a whole conversation, while `rundesk asked` went on
+    listing the same work as active out of the very records the query had in its hands.
+
+    Not there, there and half-written, and there and impossible to open are all answered as an
+    identity that is unavailable — never guessed at from the delegation row, which holds no brief,
+    and never recorded, because the distinction belongs to the store that owns those records and
+    this query keeps no state to hold it in. Every other read here is the asking agent's own, and a
+    failure of one of those is still a failure of the query.
+    """
+    try:
+        return arriving.delegation_brief(
+            one.to_agent, agent, one.parent_turn, one.delegation_id)
+    except (records.NotThere, records.Unreadable, sqlite3.DatabaseError, OSError):
+        return ""
 
 
 def _task_identity(body: str) -> str:

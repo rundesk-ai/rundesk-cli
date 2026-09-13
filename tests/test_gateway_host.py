@@ -22,6 +22,7 @@ import json
 import os
 import shutil
 import signal
+import sqlite3
 import time
 import unittest
 from pathlib import Path
@@ -173,6 +174,126 @@ class AConversationScopedDelegationQuery(support.Isolated):
         returned = self.summary()
         self.assertEqual(1, returned.count(f"local-{current}-"))
         self.assertIn("state: returned", returned)
+
+    def unreadable_records(self, target):
+        """Leave one target's store there and impossible to read — the reported live failure.
+
+        Bytes rather than a patched read: `records.reading` is what decides that a file which is
+        not a database is `Unreadable` rather than absent, and a case that induced that decision
+        itself would pass with the decision gone. The probe proves the fixture before the query is
+        asked anything, and any delegation key does — the store refuses at open time.
+        """
+        directory.records(target).write_bytes(b"not an agent's records at all")
+        with self.assertRaises(records.Unreadable):
+            arriving.delegation_brief(target, "ava", self.turn, "del-probe")
+
+    def test_an_unreadable_target_brief_keeps_named_and_local_work_listed(self):
+        wanted = self.handed_over()
+        directory.made("cass", support.A_STAND_IN)
+        readable = self.handed_over("del-2-ddeeff", "Draft the changelog", target="cass")
+        current = self.a_turn(
+            "ava", self.parent.conversation, "working", "2026-08-10T12:02:00Z")
+        turns_kept.add_turn_record(
+            "ava", current, "tool",
+            {"type": "tool", "id": "provider-internal-id", "did": "delegate"},
+            when=datetime.datetime(2026, 8, 10, 12, 2, 5, tzinfo=datetime.timezone.utc))
+        self.unreadable_records("bob")
+
+        with mock.patch.object(records, "writing", side_effect=AssertionError("query wrote state")):
+            result = delegation_query.read(
+                "ava", "discord", "1180",
+                now=datetime.datetime(2026, 8, 10, 12, 5, tzinfo=datetime.timezone.utc))
+            said = self.summary()
+
+        held = {item.item_id: item for item in result.items}
+        self.assertEqual({wanted, readable},
+                         {one.item_id for one in result.items if one.kind == "named-agent"})
+        self.assertEqual("task identity unavailable", held[wanted].task)
+        self.assertEqual("bob", held[wanted].target)
+        self.assertEqual("active", held[wanted].state)
+        self.assertEqual("4m elapsed", held[wanted].timing)
+        self.assertEqual("Draft the changelog", held[readable].task)
+        self.assertEqual("active", held[readable].state)
+        self.assertEqual(
+            1, len([one for one in result.items if one.kind == "provider-local"]))
+        self.assertIn("Relevant delegations:", said)
+        self.assertEqual(1, said.count(wanted))
+        self.assertEqual(1, said.count(readable))
+        self.assertNotIn("PRIVATE PROMPT BODY", said)
+
+    def test_every_live_named_state_stays_listed_when_the_target_brief_cannot_be_read(self):
+        wanted = self.handed_over()
+        self.unreadable_records("bob")
+
+        def shown(state):
+            said = self.summary()
+            self.assertEqual(1, said.count(wanted), said)
+            self.assertIn(f"state: {state}", said)
+            self.assertIn("task identity unavailable", said)
+            self.assertNotIn("Audit the exporter", said)
+            self.assertNotIn("PRIVATE PROMPT BODY", said)
+
+        shown("active")
+
+        delegations_kept.stop_asked(
+            "ava", wanted, now=datetime.datetime(2026, 8, 10, 12, 1, tzinfo=datetime.timezone.utc))
+        shown("stopping")
+
+        result = arriving.said_by_rundesk_into(
+            "ava", self.parent.conversation, "FULL RESULT MUST NOT APPEAR",
+            external_id=f"delegation-result:{wanted}:answer-9",
+            when=datetime.datetime(2026, 8, 10, 12, 3, tzinfo=datetime.timezone.utc))
+        review = self.a_turn(
+            "ava", self.parent.conversation, "working", "2026-08-10T12:03:01Z")
+        arriving.handled_by_turn("ava", self.parent.conversation, (result.message,), review)
+        delegations_kept.answered(
+            "ava", wanted, now=datetime.datetime(2026, 8, 10, 12, 3, tzinfo=datetime.timezone.utc))
+        shown("returned — awaiting review")
+
+        turns_kept.finish_turn(
+            "ava", review, turns_kept.DONE,
+            when=datetime.datetime(2026, 8, 10, 12, 4, tzinfo=datetime.timezone.utc))
+        shown("reviewed")
+
+    def test_a_target_store_that_is_missing_or_unopenable_reads_as_identity_unavailable(self):
+        wanted = self.handed_over()
+        directory.records("bob").unlink()
+
+        said = self.summary()
+        self.assertEqual(1, said.count(wanted), said)
+        self.assertIn("task identity unavailable", said)
+
+        # A store present and impossible to open answers in sqlite3's own word rather than this
+        # product's, and one behind a directory nobody may enter in the operating system's.
+        # Induced exactly, because neither state can be staged from a file's contents.
+        for why in (sqlite3.OperationalError("unable to open database file"),
+                    PermissionError("state.db")):
+            with self.subTest(why=type(why).__name__):
+                with mock.patch.object(arriving, "delegation_brief", side_effect=why):
+                    said = self.summary()
+                self.assertEqual(1, said.count(wanted), said)
+                self.assertIn("task identity unavailable", said)
+
+    def test_the_asking_agents_own_unreadable_records_are_still_a_failure(self):
+        self.handed_over()
+        with mock.patch.object(turns_kept, "get_turn",
+                               side_effect=records.Unreadable("ava's own turns")):
+            with self.assertRaises(records.Unreadable):
+                self.summary()
+
+    def test_an_unexpected_failure_at_the_target_seam_is_still_a_query_failure(self):
+        """The upper bound of the one optional read, at the seam that absorbs a storage answer.
+
+        A `TypeError` from `delegation_brief` is this product's own defect — a signature that moved
+        under its caller — and not a colleague's disk. Widened to `Exception`, the catch would
+        answer a whole conversation with identities nobody can restore and no failure anywhere,
+        which is the shape of the outage this seam was narrowed to end rather than to hide.
+        """
+        self.handed_over()
+        with mock.patch.object(arriving, "delegation_brief",
+                               side_effect=TypeError("signature changed")):
+            with self.assertRaisesRegex(TypeError, "signature changed"):
+                self.summary()
 
     def test_empty_state_is_plain_and_a_missing_conversation_is_not_created(self):
         before = arriving.conversations("ava")
