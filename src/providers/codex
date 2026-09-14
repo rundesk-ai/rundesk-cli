@@ -143,6 +143,47 @@ DID_FOR_COMMAND = {"read": "read", "listFiles": "list", "search": "search", "unk
 #: presenting something to whoever asked; that is the intent, and the path is where it lives.
 A_CITATION = re.compile(r':codex-file-citation\{[^}]*?path="(?P<at>[^"]*)"[^}]*\}')
 
+#: How this brain offers the next thing somebody could ask, in the same family of markup as the
+#: citation above and with nothing behind it here. `:codex-followup[Label]{prompt="…"}` is a button
+#: on the vendor's own surface: the label is what the button says and `prompt` is what pressing it
+#: would send. A chat platform has no such control, so the whole directive reached a person as
+#: literal markup — three of them, bulleted, in a direct message — and the prompt inside each one
+#: read as the agent dictating the next question to whoever asked.
+#:
+#: **Nothing of it is kept, label included.** A citation names a file that still exists once the
+#: markup is gone, so it leaves a word behind; a follow-up names only the gesture, and a label with
+#: no button under it is the text of something nobody can press.
+#:
+#: **A quoted value is read as one, and the citation's own pattern is not copied here.** `prompt`
+#: carries a sentence somebody will read, and a sentence may hold a `}`; stopping at the first one
+#: would leave the tail of the prompt standing in the answer, which is the half-omission this is
+#: for.
+A_PROMPT_BLOCK = r'\{(?:[^}"\n]|"[^"\n]*")*\}'
+
+#: **One whole component at least, or this is prose and not a directive.** Written with both parts
+#: optional it also matched the name on its own, so a sentence *about* the syntax lost the word out
+#: of the middle of it — `The adapter omits :codex-followup directives` came back with a hole, and a
+#: backticked name came back as empty backticks. A directive is the name followed by a closed label,
+#: a closed block, or both; a bare mention is somebody talking, and nothing here may edit that.
+#:
+#: **Incomplete is left alone rather than guessed at.** An unclosed bracket or quote is the brain
+#: having written something malformed, and running to the end of the line on a guess about where it
+#: meant to stop would take prose with it. A component that *did* close still goes — a complete
+#: label followed by a block that never closes loses the label, and the unclosed tail stays the text
+#: it is.
+#:
+#: The observed form is a label with a block. Block alone is the shape the citation above writes, so
+#: this family's parts are known to be optional one at a time; label alone is that same grammar read
+#: symmetrically and is matched for the same reason — either way it is this one named directive, and
+#: never markup in general.
+A_FOLLOWUP = re.compile(r':codex-followup(?:\[[^\]\n]*\](?:%s)?|%s)'
+                        % (A_PROMPT_BLOCK, A_PROMPT_BLOCK))
+
+#: What is left of a line that carried nothing but follow-ups. The brain writes them as a list, so
+#: removing the directives alone would leave a run of bare `-` — markup omitted into malformed
+#: prose rather than out of it.
+A_BARE_MARKER = re.compile(r'^\s*(?:[-*+]|\d+[.)])?\s*$')
+
 #: Which of the closed words each of the brain's own error names means. **Nothing is inferred from
 #: the prose beside it** — a word guessed from a message is a word that is wrong on the first vendor
 #: that rewords one. A name absent from here is reported with no word at all rather than a wrong one.
@@ -675,7 +716,9 @@ class Turn:
         """One thing the brain did, in rundesk's words. Unknown kinds are reported to nobody."""
         kind = item.get("type")
         if kind == "agentMessage" and not started:
-            text = self.anything_it_cited(str(item.get("text") or ""))
+            # Follow-ups go first: a citation inside one would otherwise be reported as a file for
+            # a line nobody is ever shown.
+            text = self.anything_it_cited(self.anything_it_suggested(str(item.get("text") or "")))
             if text.strip():
                 phase = str(item.get("phase") or "")
                 say({"type": "text", "text": text, "whole": True,
@@ -919,6 +962,40 @@ class Turn:
             return os.path.basename(at)
 
         return A_CITATION.sub(instead, text)
+
+    def anything_it_suggested(self, text: str) -> str:
+        """The brain's own follow-up syntax, taken out whole — label, prompt and bullet.
+
+        It writes `:codex-followup[Label]{prompt="…"}` **inline in its prose**, one per thing it
+        thinks could be asked next. On the vendor's own surface that is a button; on a chat platform
+        it is markup, and a person was shown three bulleted lines of it with the prompts inside them
+        reading as the agent asking itself the next question.
+
+        **A line that held nothing else goes with them.** Removing the directive alone from a list
+        leaves a bare `-` per suggestion, which is markup omitted into malformed prose rather than
+        out of it. A directive standing in the middle of a sentence loses only itself, because the
+        words around it are the answer.
+
+        **Nothing is left behind when that was the whole message.** An empty string is not said at
+        all, and rundesk's own rule for a turn that closed on nothing takes it from there — which is
+        the honest outcome, rather than posting an empty message or the markup that caused this.
+
+        The substring below is a fast path and never the decision: `A_FOLLOWUP` is what tells a
+        directive from an agent merely naming one, and an answer about this syntax is an answer.
+
+        Kept here and nowhere else, for the reason `anything_it_cited` is: one vendor's spelling,
+        and the seam above must not learn it.
+        """
+        if "codex-followup" not in text:
+            return text
+        kept = []
+        for line in text.splitlines():
+            without = A_FOLLOWUP.sub("", line)
+            if without == line:
+                kept.append(line)
+            elif not A_BARE_MARKER.match(without):
+                kept.append(without.rstrip())
+        return "\n".join(kept).strip("\n")
 
     def anything_it_made(self) -> None:
         """Every image this turn made, as `file` records — found on disk, because it never said.

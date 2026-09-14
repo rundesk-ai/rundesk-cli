@@ -76,6 +76,50 @@ def replayed(home, prompt="Read note.txt and tell me the number in it.", capture
     return said, got
 
 
+#: A brain that answers with exactly the words a case hands it, once, as a finished final answer.
+#: **A capture cannot stand in for these cases**: what is under test is what the adapter makes of
+#: one particular sentence, and the sentence is the case's rather than a recorded turn's.
+A_BRAIN_THAT_SAYS_WHAT_IT_IS_GIVEN = '''#!/usr/bin/env python3
+import json, os, sys
+if "--capabilities" in sys.argv[1:]:
+    print('{"tools": true}'); raise SystemExit(0)
+for line in sys.stdin:
+    try:
+        said = json.loads(line)
+    except ValueError:
+        continue
+    if said.get("method") == "initialize":
+        print(json.dumps({"id": said["id"], "result": {}}), flush=True)
+    elif said.get("method") == "thread/start":
+        print(json.dumps({"id": said["id"], "result": {"thread": {"id": "t-1"}}}), flush=True)
+    elif said.get("method") == "turn/start":
+        print(json.dumps({"id": said["id"], "result": {}}), flush=True)
+        print(json.dumps({"method": "item/completed", "params": {"item": {
+            "type": "agentMessage", "id": "m1", "phase": "final_answer",
+            "text": os.environ["SAYING"]}}}), flush=True)
+        print(json.dumps({"method": "turn/completed",
+                          "params": {"threadId": "t-1",
+                                     "turn": {"id": "u-1", "status": "completed"}}}), flush=True)
+'''
+
+
+def said_when_a_brain_says(home, saying):
+    """Run the adapter against a brain whose whole answer is `saying`, and hand back its records."""
+    where = home / "cwd"
+    where.mkdir(parents=True, exist_ok=True)
+    instead = home / "bin"
+    instead.mkdir(parents=True, exist_ok=True)
+    (instead / "codex").write_text(A_BRAIN_THAT_SAYS_WHAT_IT_IS_GIVEN, encoding="utf-8")
+    (instead / "codex").chmod(0o755)
+    got = subprocess.run(
+        [str(ADAPTER)], input=json.dumps({"type": "say", "text": "make a pdf"}) + "\n",
+        capture_output=True, text=True, timeout=PATIENCE, check=False,
+        env={"PATH": f"{instead}:/usr/bin:/bin", "RUNDESK_CWD": str(where),
+             "RUNDESK_ACCESS_MODE": "work", "RUNDESK_AGENT": "cole", "RUNDESK_RUN": "1",
+             "SAYING": saying})
+    return [json.loads(one) for one in got.stdout.splitlines() if one.strip()]
+
+
 class Capabilities(support.Isolated):
     """Asked offline, with no account and no network, and the same answer every time."""
 
@@ -440,43 +484,8 @@ class WhenTheBrainCitesAFileItMade(support.Isolated):
 
     SAID = (':codex-file-citation{path="%s" purpose="output"}')
 
-    A_BRAIN_THAT_CITES = '''#!/usr/bin/env python3
-import json, os, sys
-if "--capabilities" in sys.argv[1:]:
-    print('{"tools": true}'); raise SystemExit(0)
-for line in sys.stdin:
-    try:
-        said = json.loads(line)
-    except ValueError:
-        continue
-    if said.get("method") == "initialize":
-        print(json.dumps({"id": said["id"], "result": {}}), flush=True)
-    elif said.get("method") == "thread/start":
-        print(json.dumps({"id": said["id"], "result": {"thread": {"id": "t-1"}}}), flush=True)
-    elif said.get("method") == "turn/start":
-        print(json.dumps({"id": said["id"], "result": {}}), flush=True)
-        print(json.dumps({"method": "item/completed", "params": {"item": {
-            "type": "agentMessage", "id": "m1", "phase": "final_answer",
-            "text": os.environ["SAYING"]}}}), flush=True)
-        print(json.dumps({"method": "turn/completed",
-                          "params": {"threadId": "t-1",
-                                     "turn": {"id": "u-1", "status": "completed"}}}), flush=True)
-'''
-
     def ran(self, saying):
-        where = self.home / "cwd"
-        where.mkdir(parents=True, exist_ok=True)
-        instead = self.home / "bin"
-        instead.mkdir(parents=True, exist_ok=True)
-        (instead / "codex").write_text(self.A_BRAIN_THAT_CITES, encoding="utf-8")
-        (instead / "codex").chmod(0o755)
-        got = subprocess.run(
-            [str(ADAPTER)], input=json.dumps({"type": "say", "text": "make a pdf"}) + "\n",
-            capture_output=True, text=True, timeout=PATIENCE, check=False,
-            env={"PATH": f"{instead}:/usr/bin:/bin", "RUNDESK_CWD": str(where),
-                 "RUNDESK_ACCESS_MODE": "work", "RUNDESK_AGENT": "cole", "RUNDESK_RUN": "1",
-                 "SAYING": saying})
-        return [json.loads(one) for one in got.stdout.splitlines() if one.strip()]
+        return said_when_a_brain_says(self.home, saying)
 
     def a_pdf(self):
         at = self.home / "out" / "test.pdf"
@@ -521,6 +530,162 @@ for line in sys.stdin:
         text = next(one for one in said if one.get("type") == "text")["text"]
         self.assertIn("test.pdf", text)
         self.assertNotIn("codex-file-citation", text)
+
+
+class WhenTheBrainSuggestsWhatToAskNext(support.Isolated):
+    """The brain's own follow-up syntax, which reached a person as markup with a prompt inside it.
+
+    `:codex-followup[Label]{prompt="…"}` is a button on the vendor's own surface: the label is what
+    the button says and `prompt` is what pressing it would send. A chat platform has neither, so a
+    Discord direct message arrived carrying three bulleted directives verbatim — the prompts inside
+    them reading as the agent dictating the next question to whoever had asked.
+
+    The shape is the reported one; every label and prompt here is synthetic.
+    """
+
+    ONE = ':codex-followup[Define mapping]{prompt="Create a proposed mapping for approval."}'
+    ANOTHER = ':codex-followup[Specify export]{prompt="Draft the fields for a joinable export."}'
+    A_THIRD = ':codex-followup[Name an owner]{prompt="Say who signs the mapping off."}'
+
+    #: Every word that must not survive: the directive's own name, both labels a case uses, and the
+    #: prompt payload each one carries.
+    NOT_A_WORD_OF = ("codex-followup", "Define mapping", "Specify export", "Name an owner",
+                     "Create a proposed mapping", "Draft the fields", "Say who signs")
+
+    def a_turn_saying(self, saying):
+        """Every record the adapter made, for the cases that read more than the answer."""
+        said = said_when_a_brain_says(self.home, saying)
+        self.assertEqual([True], [one.get("ok") for one in said if one.get("type") == "done"],
+                         "the turn did not end cleanly")
+        return said
+
+    def answered(self, saying):
+        """The one text record rundesk would publish, or `None` where nothing was said at all.
+
+        Every case reaching this is one where a directive must go, so the sweep belongs here. A case
+        about words that must **survive** uses `words_said`, because these are the words it wants.
+        """
+        texts = [one for one in self.a_turn_saying(saying) if one.get("type") == "text"]
+        self.assertLessEqual(len(texts), 1, texts)
+        for one in texts:
+            for word in self.NOT_A_WORD_OF:
+                self.assertNotIn(word, one["text"])
+        return texts[0] if texts else None
+
+    def words_said(self, saying):
+        """The text of the one record said, with nothing assumed about what is in it."""
+        texts = [one for one in self.a_turn_saying(saying) if one.get("type") == "text"]
+        self.assertEqual(1, len(texts), texts)
+        return texts[0]["text"]
+
+    def test_one_directive_leaves_the_answer_it_stood_under(self):
+        said = self.answered(f"Mapped the three source columns.\n\n{self.ONE}")
+        self.assertEqual("Mapped the three source columns.", said["text"])
+        self.assertTrue(said.get("final"),
+                        "the words left behind are still the answer and must still say so")
+
+    def test_consecutive_bulleted_directives_leave_no_bullet_behind(self):
+        # The reported shape, and the reason a line is dropped rather than emptied: taking the
+        # directive out of each of these alone leaves three lines reading `-`.
+        said = self.answered("Here is what changed.\n\n"
+                             f"- {self.ONE}\n- {self.ANOTHER}\n- {self.A_THIRD}")
+        self.assertEqual("Here is what changed.", said["text"])
+
+    def test_prose_before_between_and_after_them_is_preserved(self):
+        said = self.answered(f"First.\n\n- {self.ONE}\n\nSecond.\n\n- {self.ANOTHER}\n\nThird.")
+        for word in ("First.", "Second.", "Third."):
+            self.assertIn(word, said["text"])
+
+    def test_a_directive_inside_a_sentence_loses_only_itself(self):
+        said = self.answered(f"You could {self.ONE} once the export is agreed.")
+        self.assertTrue(said["text"].startswith("You could"), said["text"])
+        self.assertTrue(said["text"].endswith("once the export is agreed."), said["text"])
+
+    def test_every_list_marker_it_might_use_goes_with_its_directive(self):
+        for marker in ("-", "*", "+", "1.", "2)", "  -"):
+            with self.subTest(marker=marker):
+                said = self.answered(f"Next steps.\n\n{marker} {self.ONE}")
+                self.assertEqual("Next steps.", said["text"])
+
+    def test_a_message_that_was_nothing_but_directives_is_not_said_at_all(self):
+        """**Nothing is better than an empty message or the markup that caused this.** An answer
+        with nothing else in it leaves no text record, and rundesk's own rule for a turn that closed
+        on nothing takes it from there — proved where that rule lives, in
+        `tests/test_providers_answering.py`."""
+        self.assertIsNone(self.answered(f"- {self.ONE}\n- {self.ANOTHER}"))
+
+    def test_a_prompt_holding_a_closing_brace_does_not_leave_its_tail_behind(self):
+        # `prompt` is a sentence somebody reads, and a sentence may hold a `}`. Stopping at the
+        # first one omits the directive and posts the rest of the prompt.
+        said = self.answered('Mapped it.\n\n'
+                             ':codex-followup[Define mapping]'
+                             '{prompt="Say what ${column} maps onto, and why."}')
+        self.assertEqual("Mapped it.", said["text"])
+
+    def test_blank_lines_elsewhere_in_the_answer_are_left_exactly_as_they_were(self):
+        # A fenced block with blank lines in it is the case a tidy-up would quietly corrupt, so
+        # only the lines the directives were on are touched.
+        said = self.answered(f"Here.\n\n```\nfirst\n\n\nlast\n```\n\n- {self.ONE}")
+        self.assertEqual("Here.\n\n```\nfirst\n\n\nlast\n```", said["text"])
+
+    def test_an_answer_with_no_directive_in_it_is_untouched(self):
+        """This omits one vendor's own control syntax and nothing else. A list, a colon and a fence
+        are prose a person asked for."""
+        prose = "Done:\n\n- read the file\n- wrote the report\n\n```\n:not a directive\n```\n"
+        self.assertEqual(prose, self.answered(prose)["text"])
+
+    def test_naming_the_directive_is_prose_and_the_name_survives(self):
+        """**An agent explaining this syntax is answering, not offering a button.** Written with
+        both components optional the pattern matched the bare name too, so a sentence about it came
+        back with a hole in the middle."""
+        prose = "The adapter omits :codex-followup directives from answers."
+        self.assertEqual(prose, self.words_said(prose))
+
+    def test_a_backticked_name_does_not_become_empty_backticks(self):
+        prose = "Rundesk removes `:codex-followup` before the answer goes out."
+        self.assertEqual(prose, self.words_said(prose))
+
+    def test_incomplete_syntax_is_left_alone_rather_than_guessed_at(self):
+        """An unclosed bracket or quote is the brain having written something malformed, and running
+        to the end of the line on a guess about where it meant to stop would take prose with it."""
+        for malformed in (":codex-followup",
+                          ":codex-followup[Define mapping",
+                          ':codex-followup{prompt="never closed'):
+            with self.subTest(malformed=malformed):
+                prose = f"Mapped it. {malformed}"
+                self.assertEqual(prose, self.words_said(prose))
+
+    def test_a_component_that_closed_still_goes_and_the_tail_that_did_not_stays(self):
+        # The label is whole and the block never closes. Taking the label is not a guess; taking
+        # what follows it would be, so the tail is left as the text it is.
+        self.assertEqual('Mapped it. {prompt="never closed',
+                         self.words_said('Mapped it. '
+                                         ':codex-followup[Define mapping]{prompt="never closed'))
+
+    def test_a_label_with_no_prompt_block_is_still_a_directive(self):
+        self.assertEqual("Mapped it.",
+                         self.answered("Mapped it.\n\n- :codex-followup[Define mapping]")["text"])
+
+    def test_a_prompt_block_with_no_label_is_still_a_directive(self):
+        self.assertEqual("Mapped it.", self.answered(
+            'Mapped it.\n\n- :codex-followup{prompt="Create a proposed mapping for approval."}'
+        )["text"])
+
+    def test_a_citation_inside_an_omitted_follow_up_attaches_nothing(self):
+        """**The order the two run in is load-bearing.** Citations first would file the PDF named
+        inside a prompt nobody is ever shown — an agent mailing somebody an attachment for a button
+        that was never pressed. Follow-ups go first, so the citation is gone before anything looks
+        for one."""
+        at = self.home / "out" / "test.pdf"
+        at.parent.mkdir(parents=True, exist_ok=True)
+        at.write_bytes(b"%PDF-1.4")
+        said = self.a_turn_saying(
+            'Mapped it.\n\n- :codex-followup[Define mapping]'
+            '{prompt="Read :codex-file-citation{path="' + str(at) + '"} first."}')
+        self.assertEqual([], [one for one in said if one.get("type") == "file"],
+                         "a file named inside an omitted follow-up was attached to the answer")
+        text = next(one for one in said if one.get("type") == "text")["text"]
+        self.assertEqual("Mapped it.", text)
 
 
 class WhenASessionWillNotResume(support.Isolated):
