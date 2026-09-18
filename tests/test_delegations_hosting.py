@@ -1140,6 +1140,153 @@ class WhatMovesADelegationsLatestMoment(support.Isolated):
             set(row.keys()))
 
 
+class WhichRecordedAnswersAreOfferedForReviewAgain(support.Isolated):
+    """An answer can be the asking agent's and still unread — a turn it could not be given to was
+    already running. The row is what decides whether it is offered again, never the message."""
+
+    class Offering:
+        """The seam, with what it was asked to review written down.
+
+        `recorded_reviews` answers whatever the store's own query would have: this case is about
+        what the sweep does with an id, not about how one is found.
+        """
+
+        def __init__(self, owed, goes_wrong=False):
+            self.owed = owed
+            self.goes_wrong = goes_wrong
+            self.reviewed = []
+            self.asked_for = []
+
+        def answer_this(self, *args, **more):
+            raise AssertionError("nothing here was handed to this agent")
+
+        def recorded_reviews(self, _agent, _most, looking_at):
+            self.asked_for.append(looking_at)
+            return self.owed
+
+        def review_this(self, agent, conversation, answer, from_agent, delegation_id, answer_id):
+            self.reviewed.append((agent, conversation, str(answer), from_agent, delegation_id))
+            if self.goes_wrong:
+                raise records.Unreadable(f"{delegation_id} could not be offered")
+            return True
+
+        def showed(self, *args, **more):
+            return False
+
+    def setUp(self):
+        super().setUp()
+        paths.agents().mkdir(parents=True, exist_ok=True)
+        directory.made("ava", "a-stand-in")
+        directory.made("bob", "a-stand-in")
+        self.delegation = "del-8-bbccdd"
+        self.conversation = arriving.asked_at_a_terminal("ava", "hand it to bob").conversation
+        self.turn = provider_kept.add_turn("ava", {
+            "conversation_id": self.conversation,
+            "provider_name": "a-stand-in",
+            "access_mode": "work",
+        })
+        provider_kept.finish_turn("ava", self.turn, provider_kept.DONE)
+        self.landed = arriving.recorded_for_a_delegation(
+            "bob", "ava", self.turn, "audit it", delegation_id=self.delegation)
+        kept.made("ava", self.delegation, "bob", self.conversation, self.turn)
+        turn = provider_kept.add_turn("bob", {
+            "conversation_id": self.landed.conversation,
+            "provider_name": "a-stand-in",
+            "access_mode": "work",
+        })
+        arriving.handled_by_turn("bob", self.landed.conversation, (self.landed.message,), turn)
+        arriving.said_by_agent(
+            "bob", kept.FROM_AGENT, kept.source_id_for("ava", self.turn, self.delegation),
+            "the report", turn=turn)
+        provider_kept.finish_turn("bob", turn, provider_kept.DONE)
+        self.offering = self.Offering((self.delegation,))
+
+    def swept(self):
+        hosting._reviewed_what_was_recorded("ava", directory.logs("ava"), self.offering)
+        return self.offering.reviewed
+
+    def test_an_answered_delegation_nobody_read_is_offered_again(self):
+        kept.answered("ava", self.delegation)
+
+        self.assertEqual(
+            [("ava", self.conversation, "the report", "bob", self.delegation)], self.swept())
+
+    def test_stopped_work_is_never_offered_a_review(self):
+        """R-DEL-18. A stop that landed in the moment between recording an answer and settling it
+        leaves the message where it is; what it must not do is wake the agent for a review."""
+        kept.stopped("ava", self.delegation)
+
+        self.assertEqual([], self.swept())
+
+    def test_work_carried_on_is_not_reviewed_with_the_answer_it_already_had(self):
+        kept.answered("ava", self.delegation)
+        kept.reopened("ava", self.delegation)
+
+        self.assertEqual([], self.swept())
+
+    def test_a_delegation_that_is_no_longer_there_is_passed_over(self):
+        kept.answered("ava", self.delegation)
+        self.offering.owed = (self.delegation, "del-nothing-knows")
+
+        self.assertEqual(1, len(self.swept()))
+
+    def more_owed_than_one_pass_may_try(self, goes_wrong=False):
+        """Five answered delegations, every one of them owed a review."""
+        named = [self.delegation]
+        for number in range(4):
+            named.append(f"del-8-{number}bbccdd")
+            kept.made("ava", named[-1], "bob", self.conversation, self.turn)
+            landed = arriving.recorded_for_a_delegation(
+                "bob", "ava", self.turn, "audit it", delegation_id=named[-1])
+            turn = provider_kept.add_turn("bob", {
+                "conversation_id": landed.conversation,
+                "provider_name": "a-stand-in",
+                "access_mode": "work",
+            })
+            arriving.handled_by_turn("bob", landed.conversation, (landed.message,), turn)
+            arriving.said_by_agent(
+                "bob", kept.FROM_AGENT, kept.source_id_for("ava", self.turn, named[-1]),
+                "the report", turn=turn)
+            provider_kept.finish_turn("bob", turn, provider_kept.DONE)
+        for one in named:
+            kept.answered("ava", one)
+        self.offering = self.Offering(tuple(named), goes_wrong=goes_wrong)
+        return named
+
+    def test_a_pass_tries_no_more_answers_than_it_may(self):
+        self.more_owed_than_one_pass_may_try()
+
+        self.assertEqual(hosting.REVIEWED_AT_MOST, len(self.swept()))
+
+    def test_an_offer_that_goes_wrong_spends_the_attempt_it_made(self):
+        """Otherwise a pass in front of work that always fails reads, starts and logs without end —
+        the log line is the part somebody finds, a beat later, repeated for every row in the store.
+        """
+        self.more_owed_than_one_pass_may_try(goes_wrong=True)
+
+        self.assertEqual(hosting.REVIEWED_AT_MOST, len(self.swept()))
+        self.assertEqual(hosting.REVIEWED_AT_MOST, sum(
+            "could not be reviewed" in line
+            for path in sorted(directory.logs("ava").glob("*"))
+            for line in path.read_text(encoding="utf-8").splitlines()))
+
+    def test_a_pass_asks_for_no_more_rows_than_it_will_look_at(self):
+        kept.answered("ava", self.delegation)
+
+        self.swept()
+
+        self.assertEqual([hosting.INSPECTED_AT_MOST], self.offering.asked_for)
+
+    def test_the_beat_asks_for_them(self):
+        """The wiring, because a sweep nothing calls is a sweep that never runs."""
+        kept.answered("ava", self.delegation)
+        carrying = hosting.settled("ava", directory.logs("ava"))
+
+        hosting.looked("ava", directory.logs("ava"), carrying, self.offering)
+
+        self.assertEqual([self.delegation], [one[4] for one in self.offering.reviewed])
+
+
 class WhichModelActuallyRanATargetsTurn(unittest.TestCase):
     """**One rule, written in two layers, and this is what keeps them saying the same thing.**
 

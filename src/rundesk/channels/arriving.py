@@ -58,6 +58,12 @@ BODY_AT_MOST = 64 * 1024
 #: because a channel makes a conversation per room and per person for as long as the agent lives.
 CONVERSATIONS_AT_MOST = 200
 
+#: What a delegated answer's external id begins with, and the whole of how a recorded result is
+#: found again. The id itself is `delegation-result:<delegation>:<answer>`, written once by the
+#: layer that delivers a result and read here by the two questions asked of it afterwards: which
+#: turn took one, and which of them nothing has taken yet.
+A_DELEGATION_RESULT = "delegation-result:"
+
 #: A pending message belongs only to the unresolved tail of its conversation. Once a later message
 #: has been admitted, the exchange has moved past every older unclaimed row: replaying one after a
 #: restart starts work the person has already continued beyond, and can answer an already-answered
@@ -81,6 +87,27 @@ class Landed(NamedTuple):
     conversation: int
     message: int
     fresh: bool
+
+
+class Owed(NamedTuple):
+    """One delegation whose newest recorded result is still waiting for a turn to take it."""
+
+    delegation_id: str
+    conversation: int
+    message: int
+
+
+class Window(NamedTuple):
+    """One bounded look at the results nobody has taken, and where that look got to.
+
+    `reached` is the last row it read, whether or not that row is owed anything, so a caller
+    continuing from it cannot be held at the same rows by ones it will always pass over. It is the
+    position the look began at when the look read nothing, which is the only thing that means *there
+    is nothing after here* — a look that read rows and found none of them owed has still moved.
+    """
+
+    owed: Tuple[Owed, ...]
+    reached: int
 
 
 class Pending(NamedTuple):
@@ -458,18 +485,107 @@ def delegation_review_turn(agent: str, conversation: int,
     and selecting less makes exposing a specialist's full result through this seam impossible by
     accident.
     """
-    prefix = f"delegation-result:{delegation_id}:"
     with records.reading(directory.records(agent)) as conn:
-        found = _rows(
-            conn, agent,
-            "SELECT turn_id FROM conversation_messages"
-            " WHERE conversation_id = ? AND external_id IS NOT NULL"
-            " AND substr(external_id, 1, length(?)) = ? ORDER BY id DESC LIMIT 1",
-            (conversation, prefix, prefix),
-        ).fetchone()
+        found = _newest_delegation_result(conn, agent, conversation, delegation_id)
     if found is None or found["turn_id"] is None:
         return None
     return int(found["turn_id"])
+
+
+def _newest_delegation_result(conn: sqlite3.Connection, agent: str, conversation: int,
+                              delegation_id: str) -> Optional[sqlite3.Row]:
+    """The last result recorded for one delegation, whatever became of it.
+
+    **Asked as the range one delegation's ids occupy**, so `idx_messages_external_id` answers it out
+    of that delegation's own handful of rows rather than walking back through the conversation they
+    stand in — which, for a result recorded a month ago in a busy room, is the whole room.
+
+    The rows are ordered by the id they were written under and never by the external id: an answer
+    is numbered by its turn, and `"9"` sorts after `"10"`.
+    """
+    named = f"{A_DELEGATION_RESULT}{delegation_id}:"
+    found = _rows(
+        conn, agent,
+        "SELECT id, turn_id FROM conversation_messages"
+        " WHERE conversation_id = ? AND external_id >= ? AND external_id < ?",
+        (conversation, named, _after(named))).fetchall()
+    return max(found, key=lambda one: int(one["id"])) if found else None
+
+
+def _after(prefix: str) -> str:
+    """The first string a prefix range stops at, for a `>= prefix AND < _after(prefix)` scan."""
+    return prefix[:-1] + chr(ord(prefix[-1]) + 1)
+
+
+def pending_delegation_results(agent: str, after: int = 0,
+                               most: int = 32) -> Window:
+    """One bounded look at the delegations whose newest recorded result no turn has taken.
+
+    The other half of `delegation_review_turn`, and the reason a settled delegation still gets its
+    review. A result is written into the asking agent's own conversation before any turn exists to
+    read it, so an agent busy with a turn that cannot be spoken to keeps the row and not the answer.
+    This is what finds those rows again on a later pass, and the claim on the message itself is what
+    keeps one of them one review.
+
+    **Newest, which is what makes this one row per delegation rather than one per message.** A
+    delegation carried on has a result from every phase it has had, and only the last of them is
+    news: an older one is what the asking agent has already been told. The same rule
+    `NO_LATER_ADMITTED` states for a channel's unresolved tail, said here about one delegation's
+    results rather than one conversation's messages — and asked one delegation at a time over
+    `idx_messages_external_id`, because asked as one correlated query it is every later row in the
+    store for every candidate, which is quadratic and was measured taking seconds off a beat.
+
+    **A window and not a head.** `after` continues a walk rather than restarting it, so a result
+    nothing will ever review — work carried on, stopped or forgotten keeps its row for as long as
+    the history does, and so does one whose target cannot be read or whose review will not start —
+    delays the answer behind it by a pass rather than holding it for ever. What one call costs is
+    one indexed read of at most `most` rows plus one indexed read of each named delegation's own
+    results. Where the walk goes next is the caller's, and `reached` is what it needs to decide.
+
+    **`INDEXED BY` and not a hope.** Left to choose, SQLite reads this as a scan from the walk's
+    position forward until it has found `most` rows, because nothing has told it how few messages
+    are unclaimed — so a beat's cost became the whole of an agent's history, measured at 3 ms over
+    sixty thousand messages and growing with every one after them. Named, it is a seek into
+    `idx_messages_turn`, whose entries for unclaimed rows are already in the order this wants, and
+    the cost is the window. The index is step `0004`'s and shipped, so it is there to be named.
+    """
+    with records.reading(directory.records(agent)) as conn:
+        found = _rows(
+            conn, agent,
+            "SELECT id, conversation_id, external_id FROM conversation_messages"
+            " INDEXED BY idx_messages_turn"
+            " WHERE author = ? AND turn_id IS NULL AND external_id IS NOT NULL"
+            " AND substr(external_id, 1, length(?)) = ? AND id > ?"
+            " ORDER BY id LIMIT ?",
+            (BY_RUNDESK, A_DELEGATION_RESULT, A_DELEGATION_RESULT, after, most)).fetchall()
+        owed, reached = [], after
+        for one in found:
+            reached = int(one["id"])
+            named = _delegation_of(one["external_id"])
+            if named is None:
+                continue
+            conversation = int(one["conversation_id"])
+            newest = _newest_delegation_result(conn, agent, conversation, named)
+            if newest is None or int(newest["id"]) != reached:
+                # An earlier phase of work that has since answered again. The asking agent has been
+                # told what this says; what it is owed, if anything, is the later one.
+                continue
+            owed.append(Owed(named, conversation, reached))
+    return Window(tuple(owed), reached)
+
+
+def _delegation_of(external_id: Optional[str]) -> Optional[str]:
+    """Which delegation a recorded result names, or `None` for anything that is not one.
+
+    `delegation-result:<delegation>:<answer>`, split at the **last** colon: the answer is what
+    follows it, so the delegation is everything between the prefix and that, whatever a delegation
+    id itself holds. `None` rather than a guess for an id with no answer part, because a value
+    invented here would be looked up as a delegation and found to be missing.
+    """
+    if external_id is None or not str(external_id).startswith(A_DELEGATION_RESULT):
+        return None
+    named, colon, _answer = str(external_id)[len(A_DELEGATION_RESULT):].rpartition(":")
+    return named if colon and named else None
 
 
 def handled_by_turn(agent: str, conversation: int, messages: tuple, turn: int) -> None:

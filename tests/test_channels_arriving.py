@@ -10,6 +10,7 @@ Run directly: `python3 tests/test_channels_arriving.py`
 
 import datetime
 import unittest
+from unittest import mock
 
 import support
 from rundesk.agents import directory, records
@@ -179,6 +180,202 @@ class WhatIsWrittenDown(Arriving):
         landed = self.arrived()
         self.assertRegex(arriving.messages(self.agent, landed.conversation)[0]["created_at"],
                          r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+
+class DelegatedResultsNoTurnHasTaken(Arriving):
+    """A delegated answer is written into the asking agent's own conversation before any turn
+    exists to read it, so the row is what a later pass finds the unread ones by."""
+
+    def setUp(self):
+        super().setUp()
+        self.conversation = arriving.asked_at_a_terminal(self.agent, "hand it over").conversation
+
+    def result(self, delegation_id, answer_id="7", body="the report"):
+        return arriving.said_by_rundesk_into(
+            self.agent, self.conversation, body,
+            external_id=f"{arriving.A_DELEGATION_RESULT}{delegation_id}:{answer_id}")
+
+    def claimed(self, landed):
+        turn = turns_kept.add_turn(self.agent, {
+            "conversation_id": landed.conversation,
+            "provider_name": "stand-in",
+            "access_mode": "work",
+        })
+        arriving.handled_by_turn(
+            self.agent, landed.conversation, (landed.message,), turn)
+        return turn
+
+    def owed(self, after=0, most=32):
+        return [one.delegation_id
+                for one in arriving.pending_delegation_results(self.agent, after, most).owed]
+
+    def test_a_recorded_result_nobody_claimed_is_found_with_its_conversation(self):
+        landed = self.result("del-1-aabbcc")
+
+        self.assertEqual(
+            [arriving.Owed("del-1-aabbcc", self.conversation, landed.message)],
+            list(arriving.pending_delegation_results(self.agent).owed))
+
+    def test_a_result_a_turn_has_taken_is_not_owed_one(self):
+        self.claimed(self.result("del-1-aabbcc"))
+
+        self.assertEqual([], self.owed())
+
+    def test_anything_else_rundesk_said_is_not_a_delegated_result(self):
+        arriving.said_by_rundesk_into(self.agent, self.conversation, "the gateway came up")
+
+        self.assertEqual([], self.owed())
+
+    def test_two_phases_of_one_delegation_ask_for_one_review(self):
+        """And it is the newer phase: the older one is what the agent has already been told."""
+        self.result("del-1-aabbcc", answer_id="7")
+        newer = self.result("del-1-aabbcc", answer_id="9", body="the second report")
+        self.result("del-2-ddeeff", answer_id="4")
+
+        window = arriving.pending_delegation_results(self.agent)
+
+        self.assertEqual(["del-1-aabbcc", "del-2-ddeeff"],
+                         [one.delegation_id for one in window.owed])
+        self.assertEqual(newer.message, window.owed[0].message)
+
+    def test_an_older_phase_a_reviewed_result_left_behind_asks_for_nothing(self):
+        """The shape that would otherwise hold a pass for ever: the delegation is answered and its
+        current result has been read, and the row an earlier phase left is unclaimed for good."""
+        self.result("del-1-aabbcc", answer_id="7")
+        self.claimed(self.result("del-1-aabbcc", answer_id="9", body="the second report"))
+
+        self.assertEqual([], self.owed())
+
+    def test_a_delegation_id_holding_a_colon_is_still_read_whole(self):
+        self.result("del-1:aabbcc")
+
+        self.assertEqual(["del-1:aabbcc"], self.owed())
+
+    def test_a_neighbouring_delegation_is_not_read_as_a_later_phase(self):
+        """The prefix range one delegation's ids occupy stops at that delegation, and `:` is not
+        the only character an id can be followed by."""
+        older = self.result("del-1", answer_id="7")
+        self.result("del-12", answer_id="9")
+        self.result("del-1X", answer_id="9")
+
+        window = arriving.pending_delegation_results(self.agent)
+
+        self.assertEqual(["del-1", "del-12", "del-1X"],
+                         [one.delegation_id for one in window.owed])
+        self.assertEqual(older.message, window.owed[0].message)
+
+    def test_an_id_with_no_answer_part_names_no_delegation(self):
+        arriving.said_by_rundesk_into(
+            self.agent, self.conversation, "half an id",
+            external_id=f"{arriving.A_DELEGATION_RESULT}del-1-aabbcc")
+
+        self.assertEqual([], self.owed())
+
+    def test_the_answer_is_oldest_first(self):
+        for number in range(4):
+            self.result(f"del-{number}-aabbcc")
+
+        self.assertEqual(
+            ["del-0-aabbcc", "del-1-aabbcc", "del-2-aabbcc", "del-3-aabbcc"], self.owed())
+
+    def test_one_delegations_rows_cannot_crowd_out_another(self):
+        """The rows a carried-on delegation leaves behind are the oldest there are, and only the
+        last of them is news — so they are one entry between them and not four."""
+        for answer_id in ("3", "5", "7", "9"):
+            self.result("del-1-aabbcc", answer_id=answer_id)
+        self.result("del-2-ddeeff", answer_id="4")
+
+        self.assertEqual(["del-1-aabbcc", "del-2-ddeeff"], self.owed())
+
+    def test_a_look_stops_at_the_room_it_was_given_and_says_where_it_got_to(self):
+        rows = [self.result(f"del-{number}-aabbcc") for number in range(5)]
+
+        window = arriving.pending_delegation_results(self.agent, most=2)
+
+        self.assertEqual(["del-0-aabbcc", "del-1-aabbcc"],
+                         [one.delegation_id for one in window.owed])
+        self.assertEqual(rows[1].message, window.reached)
+
+    def test_a_look_that_reads_nothing_after_the_position_stays_where_it_was(self):
+        """The only thing that means *there is nothing after here*. A look that read rows and found
+        none of them owed has moved, and saying otherwise sends the next one back to the head."""
+        last = self.result("del-0-aabbcc")
+
+        self.assertEqual(last.message,
+                         arriving.pending_delegation_results(self.agent, most=2).reached)
+        self.assertEqual(last.message, arriving.pending_delegation_results(
+            self.agent, last.message, most=2).reached)
+
+    def test_continuing_a_look_walks_every_row_and_then_finds_nothing_after_it(self):
+        """What makes a bounded look fair rather than a bounded look at the same two rows."""
+        for number in range(5):
+            self.result(f"del-{number}-aabbcc")
+
+        seen, after, rounds = [], 0, 0
+        while rounds < 10:
+            rounds += 1
+            window = arriving.pending_delegation_results(self.agent, after, most=2)
+            seen.extend(one.delegation_id for one in window.owed)
+            if window.reached == after:
+                break
+            after = window.reached
+
+        self.assertEqual([f"del-{number}-aabbcc" for number in range(5)], seen)
+        self.assertEqual(4, rounds, "the walk did not finish in the rounds the window needs")
+
+    def test_a_look_past_rows_nothing_will_ever_review_still_moves_on(self):
+        """The rows a carried-on delegation left are owed nothing and must not hold the position."""
+        for answer_id in ("1", "2", "3"):
+            self.result("del-stale-aabbcc", answer_id=answer_id)
+        valid = self.result("del-owed-ddeeff", answer_id="4")
+
+        first = arriving.pending_delegation_results(self.agent, most=2)
+        second = arriving.pending_delegation_results(self.agent, first.reached, most=2)
+
+        self.assertEqual([], [one.delegation_id for one in first.owed])
+        self.assertEqual(["del-stale-aabbcc", "del-owed-ddeeff"],
+                         [one.delegation_id for one in second.owed])
+        self.assertEqual(valid.message, second.owed[-1].message)
+
+    def test_a_look_is_a_seek_into_the_index_and_never_a_walk_through_the_history(self):
+        """The other structural half, and the reason the window names its index.
+
+        The plan is asked of the statement the function actually ran rather than of a copy of it
+        here, so a second spelling cannot pass this while the shipped one scans. Left to choose,
+        SQLite reads the window as a walk forward from the position through every message in the
+        way — which is an agent's whole history on the beat that can least afford it.
+        """
+        for number in range(4):
+            self.result(f"del-{number}-aabbcc")
+        with mock.patch.object(arriving, "_rows", wraps=arriving._rows) as asked:
+            arriving.pending_delegation_results(self.agent, most=2)
+
+        with records.reading(directory.records(self.agent)) as conn:
+            for call, index in ((asked.call_args_list[0], "idx_messages_turn"),
+                                (asked.call_args_list[1], "idx_messages_external_id")):
+                _conn, _agent, sql, values = call[0]
+                plan = [str(row[-1]) for row
+                        in conn.execute("EXPLAIN QUERY PLAN " + sql, values).fetchall()]
+                self.assertTrue(any(index in one for one in plan), plan)
+                self.assertFalse(any(one.startswith("SCAN") for one in plan), plan)
+
+    def test_what_one_look_costs_does_not_grow_with_what_the_store_holds(self):
+        """The structural half of the measurement: a look is one read of the window plus one read
+        of each named delegation's own results, whatever else has accumulated.
+
+        This is the guard on the shape the first correction had, where every candidate was matched
+        against every later row in the store — quadratic, and seconds of a beat on a store that had
+        merely been busy for a while."""
+        for number in range(200):
+            landed = self.result(f"del-{number}-aabbcc")
+            if number % 2:
+                self.claimed(landed)
+
+        with mock.patch.object(arriving, "_rows", wraps=arriving._rows) as asked:
+            window = arriving.pending_delegation_results(self.agent, most=8)
+
+        self.assertEqual(8, len(window.owed))
+        self.assertLessEqual(asked.call_count, 1 + 8)
 
 
 class WhenTheRecordsCannotAnswer(Arriving):
