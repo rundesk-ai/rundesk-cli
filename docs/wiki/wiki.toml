@@ -1,0 +1,31 @@
+[site]
+name = "Rundesk CLI"
+tagline = "coding-agent CLIs as durable named teammates"
+github = "https://github.com/rundesk-ai/rundesk-cli"
+
+[[section]]
+title = "Start"
+pages = ["index", "brief", "goals"]
+
+[[section]]
+title = "Setup"
+pages = ["installing", "install-root", "backups", "env", "permissions"]
+
+[[section]]
+title = "Parts"
+pages = ["agents", "gateways", "providers", "channels", "schedules", "skills", "asking"]
+
+[[section]]
+title = "Commands"
+pages = ["commands"]
+
+# The source files a page should cite. `wiki coverage` lists every one no page cites yet, and every
+# citation naming a file that no longer exists. It reports; it does not fail the gate.
+[coverage]
+include = ["src/**/*.py", "rundesk", "install.sh"]
+exclude = ["src/rundesk/**/steps/*.py"]
+
+# Written by `wiki sync`. Which release of the tool these pages
+# were written against; `wiki check` says so when they differ.
+[tool]
+version = "0.8.0"

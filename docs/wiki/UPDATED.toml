@@ -1,0 +1,85 @@
+# When each page last changed, what it hashed to then, and when it was last audited.
+#
+# Written by `wiki build` and `wiki audit`, never by hand. A page is re-rendered, and its date
+# moves, only when its own content has changed -- so the date on a page means something, and a
+# build that changed nothing writes nothing. An audit keeps its day through later edits.
+
+["agents"]
+updated = "2026-09-19"
+digest = "20e3c802223a2f1daf23f57d55ab83c5a4f0270ae6b6878af12c9f11cced9c10"
+
+["asking"]
+updated = "2026-09-19"
+digest = "6965e30ba385863e9890eb142489fb2b62273cfe2315ea328897e5035f5047e8"
+
+["asking/delegation"]
+updated = "2026-09-19"
+digest = "f25f0f356d5e15b1172049dd08889999f4fe82ff2c3f7248f313604e2a537dc2"
+
+["backups"]
+updated = "2026-09-19"
+digest = "0513fce4b1351585b0625a659020cd38c8870f6c220e9f38171646d3eefcaabc"
+
+["brief"]
+updated = "2026-09-19"
+digest = "f297bf46845a1e7ae678efc7145a449e4d0cb5a3ec513ab10c17008250f5c40e"
+
+["channels"]
+updated = "2026-09-19"
+digest = "595bebe7c526f8a760874771f5f236f393d0b656e72326ed87d8629cfc30e011"
+
+["channels/authorization"]
+updated = "2026-09-19"
+digest = "5010a30fd7635e212dd3492555901ce40d3ad378a73c82a58b4cc6fabcde250d"
+
+["channels/gestures"]
+updated = "2026-09-19"
+digest = "a1781523daac6fc505e378b394e7bd7b100acaddda36eb3a35357e5634bec286"
+
+["commands"]
+updated = "2026-09-19"
+digest = "d27d4210d48d1b08c3136e135c655984fb4c7a6339574982b20160c53e5c0543"
+
+["env"]
+updated = "2026-09-19"
+digest = "cb80dfd4d3d818e2e070286cb20ad07cf410a9ac5eca47b0e5a8ee118a004f46"
+
+["gateways"]
+updated = "2026-09-19"
+digest = "f19674555c557c097739eae2b17accdee7cab74a1394c696b792ccbd3c9866ec"
+
+["goals"]
+updated = "2026-09-19"
+digest = "9f6d518b8811b1af6e25af92ef529104d44c0af12e356d981af0cb93dd610987"
+
+["index"]
+updated = "2026-09-19"
+digest = "c853ff570ba7df2909ea9e3a09c4d8c3ab07e827f5e0f2c9e0ebd92065544a53"
+
+["install-root"]
+updated = "2026-09-19"
+digest = "29cd39bb58119c30f977bd40d19de79c4580ca3f096c668b4d483e62a185d155"
+
+["installing"]
+updated = "2026-09-19"
+digest = "c403df9f77b002a53179d4e61c84a6f5c84ff92526547e05d08b6ffb0265ba8e"
+
+["permissions"]
+updated = "2026-09-19"
+digest = "a1dbe9246f97c26d4a98a71800f70eadf176604ac63bdb7cbc9465a5fe3dcfde"
+
+["providers"]
+updated = "2026-09-19"
+digest = "4019d5111fdb7637e223a61f99cdf5cb23398afac12c2efc242ae4e9e6d9003c"
+
+["schedules"]
+updated = "2026-09-19"
+digest = "7c470a9dec62355be756933b7a2767cf3c70f414a14a3256a645b321b4ff962b"
+
+["skills"]
+updated = "2026-09-19"
+digest = "e06aa3f2a38a9f9c43ddd38367f114d748da5effe121f12f85275771db7bfa10"
+
+["skills/teams"]
+updated = "2026-09-19"
+digest = "58c85bf613e1015e442f8269ca742656fb452db3530d503baad49f427b99aa90"

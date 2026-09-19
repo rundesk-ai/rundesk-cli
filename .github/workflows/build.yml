@@ -85,6 +85,20 @@ jobs:
           pip install ruff==0.16.1
           ruff check src tests scripts/suites rundesk
 
+  wiki:
+    name: the wiki is fit to read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: docs/wiki says what the code does
+        # Pinned to the same wiki-builder release `scripts/dev-wiki.sh` runs, for the same reason ruff is
+        # pinned above: the action installs the tool from its own copy, so the checks that run here are
+        # the checks that release ships, and a new rule arrives when this tag moves rather than on a
+        # morning nobody changed anything.
+        uses: timothymarois/wiki-builder@v0.8.0
+
   required-pr-gate:
     # **The name is the contract.** `main` is protected on a required context spelled
     # `required PR gate`, and a check run is matched by the name it publishes — so this job
@@ -94,6 +108,6 @@ jobs:
     # protection: the gate is what the branch asks for, and it is this file that had it wrong.
     name: required PR gate
     runs-on: ubuntu-latest
-    needs: [tests, style]
+    needs: [tests, style, wiki]
     steps:
       - run: echo "every required job passed"
