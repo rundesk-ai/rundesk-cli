@@ -56,6 +56,28 @@ STARTED_AT_MOST = 4
 #: turn begin.
 COLLECTED_AT_MOST = 4
 
+#: How many already-recorded answers one pass will **try** to offer for review again. Smaller than
+#: the other two and deliberately: each of these has already been delivered and settled, so the only
+#: thing still owed is a turn, and the rows keep until there is one.
+#:
+#: **Attempts and not successes.** Reading the target's store, starting the review and writing down
+#: that neither could be done all cost the beat whether or not an answer ends up offered, so a
+#: failure spends this exactly as a success does. Otherwise a pass in front of work that always
+#: fails does unbounded work and says so in the log unboundedly often.
+REVIEWED_AT_MOST = 2
+
+#: How many recorded results one pass will look at to find them. What a look costs is one indexed
+#: read of this many rows and one indexed read of each named delegation's own results, so this is
+#: the whole of what a pass spends before it knows which are owed anything.
+#:
+#: **Bounded because a look is not free, and fair because a bound alone is not safe.** Work carried
+#: on, stopped or forgotten keeps its recorded result for as long as the history does, and the
+#: oldest end is exactly where those collect — so `recorded_reviews` continues each look from where
+#: the last one stopped rather than starting again at the head. Thirty-two: more than an install
+#: ever has owing at once, so the ordinary pass sees everything and the walk exists for the store
+#: that has gone wrong.
+INSPECTED_AT_MOST = 32
+
 #: What `turns.turn_status` says while a turn is still going. Named here rather than imported,
 #: because this package may not reach `providers` — and asserted against it by the suite, so the two
 #: cannot drift into meaning different things.
@@ -156,7 +178,25 @@ class Answering:
 
     def review_this(self, agent: str, conversation: int, answer: str, from_agent: str,
                     delegation_id: str, answer_id: str) -> bool:
-        """Durably offer an answer for review; `True` only once a turn has admitted it."""
+        """Durably offer an answer for review; `True` once it is the asking agent's to read.
+
+        A turn that admitted it has read it. A turn that could not be started or spoken to leaves
+        the same answer recorded and unclaimed, which is still an answer that came back — see
+        `recorded_reviews` for what then owes it a turn.
+        """
+        raise NotImplementedError
+
+    def recorded_reviews(self, agent: str, most: int, looking_at: int) -> Tuple[str, ...]:
+        """Which of this agent's delegations have a recorded answer no turn has taken yet.
+
+        At most `most` of them, found by reading no more than `looking_at` recorded results and
+        **continuing from where the last call stopped** rather than starting at the head every time.
+        Whether one of them is owed a review at all is this module's to decide and not the seam's —
+        the row says whether the work was stopped, carried on, or is simply waiting for somebody to
+        read it — but how far the walk moves is the seam's, and it moves by what it handed over. A
+        walk that moved by anything else hands back the same candidates until one of them succeeds,
+        and two that never can are two that starve everything behind them.
+        """
         raise NotImplementedError
 
     def showed(self, agent: str, conversation: int, state: str, to_agent: str,
@@ -253,6 +293,11 @@ def looked(name: str, where, carrying: Carrying, answering: Answering) -> Carryi
     while work addressed to it sat untouched, and the agent waiting on that work is another agent
     whose own turn is already over.
 
+    **What was already recorded before what has just come back.** An answer recorded on an earlier
+    pass has been waiting longer, and offering it first keeps the two apart: a result written this
+    pass has a review turn of its own starting, and a second offer inside that moment would be this
+    sweep racing the thread the collection before it had just begun.
+
     **Showing last, and that ordering is the whole of why a delegation reads correctly.** Collection
     is what settles a row, so a pass that showed first would say *still working* about work that this
     same pass is about to mark answered — and the room would read a check-in below the answer it was
@@ -264,6 +309,8 @@ def looked(name: str, where, carrying: Carrying, answering: Answering) -> Carryi
     """
     _whatever_happens(where, "answering what was handed here",
                       lambda: _answered_what_was_handed_here(name, where, answering))
+    _whatever_happens(where, "reviewing answers already recorded",
+                      lambda: _reviewed_what_was_recorded(name, where, answering))
     _whatever_happens(where, "collecting what came back",
                       lambda: _collected_what_came_back(name, where, answering))
     _whatever_happens(where, "showing what became of what was handed out",
@@ -392,6 +439,13 @@ def _collected_what_came_back(name: str, where, answering: Answering) -> None:
     Keeps no list of what it has already collected either: `kept.outstanding` answers only what is
     still owed, and `kept.answered` is the `UPDATE` that decides — so the row is the guard, and a
     list beside it would be a second one to keep in step.
+
+    **Settled once the answer is durably the asking agent's, and not once a turn has read it.** The
+    two are the same moment whenever the agent is free, and they are not when it is busy with a turn
+    nothing can speak to: an answer that is written down, listed and readable is an answer that came
+    back, and waiting for the review before saying so left the work `working` for as long as that
+    turn ran — for ever, where the turn was itself waiting on this delegation. The review is still
+    owed, and `_reviewed_what_was_recorded` is what owes it.
     """
     for one in kept.outstanding(name)[:COLLECTED_AT_MOST]:
         # `asked say` makes the opposite two-store move: it checks this row, then writes the target
@@ -406,12 +460,7 @@ def _collected_what_came_back(name: str, where, answering: Answering) -> None:
                 current.to_agent, name, current.parent_turn, current.delegation_id)
             if said is None:
                 continue
-            said.requested_provider_name = current.requested_provider_name
-            said.requested_provider_alias = current.requested_provider_alias
-            said.requested_model_name = current.requested_model_name
-            said.effective_provider_name = current.provider_name
-            said.effective_provider_alias = current.provider_alias
-            said.effective_model_name = current.model_name
+            _with_provenance(said, current)
             # **A requested stop is terminal, not another answer to review.** Before this branch a
             # stopped turn was converted into "finished without saying anything (stopped)" and
             # offered to `review_this`, which woke the delegating agent for one more provider turn.
@@ -449,6 +498,75 @@ def _collected_what_came_back(name: str, where, answering: Answering) -> None:
             if still_said is None or still_said.answer_id != said.answer_id:
                 continue
             kept.answered(name, latest.delegation_id)
+
+
+def _with_provenance(said: CollectedAnswer, one: kept.Delegation) -> CollectedAnswer:
+    """Put the row's requested and effective brain beside what the target's brain reported."""
+    said.requested_provider_name = one.requested_provider_name
+    said.requested_provider_alias = one.requested_provider_alias
+    said.requested_model_name = one.requested_model_name
+    said.effective_provider_name = one.provider_name
+    said.effective_provider_alias = one.provider_alias
+    said.effective_model_name = one.model_name
+    return said
+
+
+def _reviewed_what_was_recorded(name: str, where, answering: Answering) -> None:
+    """Offer again each answer that is already this agent's and that no turn has read.
+
+    **Why an answer can be recorded and not read.** Delivery writes the result into this agent's own
+    conversation and then wants a turn for it. A turn already running there may be one nothing can
+    speak to — a scheduled run is a process of its own — so the answer is durable and the review is
+    not. Settlement follows the record rather than the turn, which is what keeps the delegation from
+    standing `working` behind a turn that may itself be waiting on it; this is the other half of
+    that, and without it a busy moment would cost the review altogether.
+
+    **The row decides, never the message.** A delegation carried on inside that moment is working
+    again and its old result is not news; a stopped one owes no review at all (R-DEL-18). Both keep
+    their recorded message and neither is offered.
+
+    **Two bounds, and each is on what a beat actually spends.** `INSPECTED_AT_MOST` is how many
+    recorded results a pass will read to find its candidates; `REVIEWED_AT_MOST` is how many of them
+    it will *try*, and the seam hands back no more than that and walks past exactly those — so what
+    happened to one, right down to a target that cannot be read and a review that will not start, is
+    behind the next pass rather than in front of it.
+
+    An attempt that fails spends its place like any other. That is the whole of why a delegation
+    behind two answers nothing can use is reached at all: the pass reads one other store, starts
+    nothing, writes one line, and the beat after it is looking somewhere else.
+
+    A pass therefore costs at most one window read of `INSPECTED_AT_MOST` rows, and
+    `REVIEWED_AT_MOST` row reads, other-store reads, review starts and log lines, whatever the store
+    has accumulated.
+
+    Nothing is settled here. `answered_at` is already written, and the claim on that one message is
+    what makes this one review however many passes offer it.
+    """
+    attempted = 0
+    for delegation_id in answering.recorded_reviews(
+            name, REVIEWED_AT_MOST, INSPECTED_AT_MOST):
+        if attempted >= REVIEWED_AT_MOST:
+            return
+        try:
+            one = kept.one(name, delegation_id)
+        except (records.NotThere, records.Unreadable, OSError):
+            continue
+        if one.answered_at is None or one.stopped_at is not None:
+            continue
+        # Spent before the work rather than after it: what follows is another agent's store, a
+        # thread and a log line, and each of them costs the beat whether or not it ends in an offer.
+        attempted += 1
+        said = _what_they_answered(one.to_agent, name, one.parent_turn, one.delegation_id)
+        if said is None:
+            continue
+        try:
+            answering.review_this(
+                name, one.parent_conversation, _with_provenance(said, one), one.to_agent,
+                one.delegation_id, said.answer_id)
+        except Exception as why:  # noqa: BLE001 — see `looked`
+            logs.note(
+                where, f"the answer to {one.delegation_id} could not be reviewed ({why})",
+                logs.ERROR)
 
 
 def _showed_what_is_happening(name: str, carrying: Carrying, answering: Answering) -> None:
