@@ -19,6 +19,7 @@ Run directly: `python3 tests/test_providers_codex.py`
 """
 
 import json
+import os
 import subprocess
 import unittest
 
@@ -94,6 +95,102 @@ class Capabilities(support.Isolated):
         """`--capabilities` is what lets an absence be a fact rather than a guess, so it must not
         need the brain to be installed to say what the adapter can do."""
         self.assertNotIn("codex_cli", self.asked())
+
+    def test_it_reports_support_for_additional_account_aliases(self):
+        self.assertTrue(self.asked()["account_aliases"])
+
+
+class SubscriptionAccounts(support.Isolated):
+    def fake_codex(self):
+        instead = self.home / "bin"
+        instead.mkdir(exist_ok=True)
+        observed = self.home / "observed.json"
+        brain = instead / "codex"
+        brain.write_text('''#!/usr/bin/env python3
+import json, os, signal, sys
+with open(os.environ["OBSERVED"], "w", encoding="utf-8") as writing:
+    json.dump({"argv": sys.argv[1:], "CODEX_HOME": os.environ.get("CODEX_HOME"),
+               "OWNER_MARKER": os.environ.get("OWNER_MARKER")}, writing)
+if os.environ.get("FAKE_SIGNAL"):
+    os.kill(os.getpid(), signal.SIGTERM)
+if os.environ.get("FAKE_STDOUT"):
+    print(os.environ["FAKE_STDOUT"])
+if os.environ.get("FAKE_STDERR"):
+    print(os.environ["FAKE_STDERR"], file=sys.stderr)
+raise SystemExit(int(os.environ.get("FAKE_CODE", "0")))
+''', encoding="utf-8")
+        brain.chmod(0o755)
+        return instead, observed
+
+    def called(self, option, stdout="", code=0, **also):
+        instead, observed = self.fake_codex()
+        env = os.environ.copy()
+        env.update({"PATH": f"{instead}:/usr/bin:/bin", "OBSERVED": str(observed),
+                    "FAKE_STDOUT": stdout, "FAKE_CODE": str(code)})
+        env.update(also)
+        got = subprocess.run([str(ADAPTER), option], capture_output=True, text=True,
+                             timeout=PATIENCE, env=env, check=False)
+        return got, json.loads(observed.read_text(encoding="utf-8"))
+
+    def test_the_default_account_keeps_the_existing_home_command_and_environment(self):
+        got, observed = self.called("--account-status", stdout="Logged in using ChatGPT",
+                                    CODEX_HOME="owners-home", OWNER_MARKER="preserved")
+        self.assertEqual({"state": "authenticated"}, json.loads(got.stdout))
+        self.assertEqual(["login", "status"], observed["argv"])
+        self.assertEqual("owners-home", observed["CODEX_HOME"])
+        self.assertEqual("preserved", observed["OWNER_MARKER"])
+
+    def test_an_alias_uses_its_private_home_and_file_backed_login(self):
+        account_home = self.home / "provider-accounts" / "codex" / "work" / "home"
+        account_home.mkdir(parents=True)
+        got, observed = self.called(
+            "--account-status", stdout="Not logged in", code=1,
+            RUNDESK_PROVIDER_ALIAS="work", RUNDESK_PROVIDER_ACCOUNT_HOME=str(account_home),
+            CODEX_HOME="owners-home", OWNER_MARKER="preserved")
+        self.assertEqual({"state": "signed_out"}, json.loads(got.stdout))
+        self.assertEqual(["-c", 'cli_auth_credentials_store="file"', "login", "status"],
+                         observed["argv"])
+        self.assertEqual(str(account_home), observed["CODEX_HOME"])
+        self.assertEqual("preserved", observed["OWNER_MARKER"])
+
+    def test_login_and_logout_use_codex_native_commands_for_the_same_alias(self):
+        account_home = self.home / "provider-accounts" / "codex" / "work" / "home"
+        account_home.mkdir(parents=True)
+        for option, command in (("--account-login", "login"),
+                                ("--account-logout", "logout")):
+            with self.subTest(option=option):
+                got, observed = self.called(
+                    option, RUNDESK_PROVIDER_ACCOUNT_HOME=str(account_home))
+                self.assertEqual(0, got.returncode)
+                self.assertEqual(["-c", 'cli_auth_credentials_store="file"', command],
+                                 observed["argv"])
+                self.assertEqual(str(account_home), observed["CODEX_HOME"])
+
+    def test_only_subscription_login_status_is_recognized(self):
+        for stdout, expected in (
+                ("Logged in using ChatGPT", "authenticated"),
+                ("Not logged in", "signed_out"),
+                ("Logged in but credentials are expired", "unable_to_check")):
+            with self.subTest(stdout=stdout):
+                code = 1 if stdout == "Not logged in" else 0
+                got, _observed = self.called("--account-status", stdout=stdout, code=code)
+                self.assertEqual({"state": expected}, json.loads(got.stdout))
+
+    def test_interrupted_and_conflicting_statuses_are_not_authoritative(self):
+        fixtures = (("Logged in using ChatGPT", 2, {}),
+                    ("Logged in using ChatGPT\nNot logged in", 0, {}),
+                    ("", 0, {"FAKE_SIGNAL": "1"}))
+        for status, code, also in fixtures:
+            with self.subTest(status=status, code=code, also=also):
+                got, _observed = self.called("--account-status", stdout=status, code=code, **also)
+                self.assertEqual(1, got.returncode)
+                self.assertEqual({"state": "unable_to_check"}, json.loads(got.stdout))
+
+    def test_a_missing_codex_is_not_reported_as_an_account_state(self):
+        got = subprocess.run([str(ADAPTER), "--account-status"], capture_output=True, text=True,
+                             timeout=PATIENCE, env={"PATH": "/usr/bin:/bin"}, check=False)
+        self.assertEqual(1, got.returncode)
+        self.assertEqual({"state": "unable_to_check"}, json.loads(got.stdout))
 
 
 class OneCapturedTurn(support.Isolated):
@@ -207,6 +304,9 @@ class WhatItAsksTheBrainFor(support.Isolated):
 import json, os, sys
 if "--capabilities" in sys.argv[1:]:
     print('{"tools": true}'); raise SystemExit(0)
+with open(os.environ["HEARD"], "a") as writing:
+    writing.write(json.dumps({"argv": sys.argv[1:], "CODEX_HOME": os.environ.get("CODEX_HOME"),
+                              "OWNER_MARKER": os.environ.get("OWNER_MARKER")}) + "\\n")
 for line in sys.stdin:
     with open(os.environ["HEARD"], "a") as writing:
         writing.write(line)
@@ -246,6 +346,25 @@ for line in sys.stdin:
     def test_it_says_who_it_is_and_never_pretends_to_be_somebody_else(self):
         self.spoken = self.spoke()
         self.assertEqual("rundesk", self.sent("initialize")[0]["params"]["clientInfo"]["name"])
+
+    def test_an_alias_turn_uses_the_same_private_subscription_login(self):
+        account_home = self.home / "provider-accounts" / "codex" / "work" / "home"
+        account_home.mkdir(parents=True)
+        self.spoken = self.spoke(RUNDESK_PROVIDER_ALIAS="work",
+                                 RUNDESK_PROVIDER_ACCOUNT_HOME=str(account_home),
+                                 CODEX_HOME="owners-home", OWNER_MARKER="preserved")
+        started = next(one for one in self.spoken if "argv" in one)
+        self.assertEqual(["-c", 'cli_auth_credentials_store="file"', "app-server", "--stdio"],
+                         started["argv"])
+        self.assertEqual(str(account_home), started["CODEX_HOME"])
+        self.assertEqual("preserved", started["OWNER_MARKER"])
+
+    def test_an_unaliased_turn_keeps_the_existing_codex_home_and_command(self):
+        self.spoken = self.spoke(CODEX_HOME="owners-home", OWNER_MARKER="preserved")
+        started = next(one for one in self.spoken if "argv" in one)
+        self.assertEqual(["app-server", "--stdio"], started["argv"])
+        self.assertEqual("owners-home", started["CODEX_HOME"])
+        self.assertEqual("preserved", started["OWNER_MARKER"])
 
     def test_the_owners_thread_list_shows_where_the_thread_came_from(self):
         self.spoken = self.spoke()
