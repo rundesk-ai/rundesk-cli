@@ -131,8 +131,11 @@ EDITED_AT = ("file_path", "notebook_path")
 GONE = "no conversation found"
 
 #: What this brain says when nothing is signed in. Kept apart from the rest because being signed out
-#: arrives as an ordinary failed turn rather than on the error stream.
-LOGGED_OUT = ("not logged in", "please run /login", "invalid api key", "unauthorized")
+#: arrives as an ordinary failed turn rather than on the error stream. An expired sign-in this brain
+#: could not refresh is matched by its whole clause: `oauth`, `expired` or `refresh` alone is not
+#: evidence that nobody is signed in.
+LOGGED_OUT = ("not logged in", "please run /login", "invalid api key", "unauthorized",
+              "oauth session expired and could not be refreshed")
 
 #: Which of the closed words each way of failing means, matched against the prose on the failed
 #: `result` line. **This is the only place this brain puts a reason** — a turn stopped by a limit
