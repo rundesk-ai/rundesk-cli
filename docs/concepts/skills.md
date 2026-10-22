@@ -29,20 +29,27 @@ is installed.
 | Catalog | Comes from | Updated by | Removable |
 |---|---|---|---|
 | `rundesk` | inside the release | every install and update, out of the release | no |
-| `rundesk-skills` | `github.com/rundesk-ai/rundesk-skills` | fetched like any other | no |
+| `skills` | `github.com/rundesk-ai/skills` | fetched like any other | no |
 | `local` | nowhere — the owner writes into it | never touched by Rundesk | no |
 | anything else | the repository it was installed from | `skills update`, and every install and update | yes |
 
-`rundesk` and `rundesk-skills` are dependencies of the product rather than choices made at install
+`rundesk` and `skills` are dependencies of the product rather than choices made at install
 time: an agent is expected to operate the thing running it, and the skills that teach it how are no
 more optional than the command is. `local` cannot be removed because removing it would delete work
 Rundesk did not write.
+
+Up to 0.61 the general catalog was `rundesk-skills`. An install carried forward keeps it as an
+ordinary catalog — updated like any other, removable with `skills remove`, and nothing granted from
+it is taken away — and gains `skills` on the update that lands 0.62. `managing-github` no longer
+ships in `rundesk`; that update gives each agent holding `rundesk/managing-github` the
+`skills/managing-github` copy instead, or revokes it and says so when `skills` could not be
+installed.
 
 **`local` is the one catalog that is flat on disk.** `app/` exists so a fetched tree can be replaced
 in one rename with `catalog.json` standing beside it. `local` is fetched from nowhere and never
 swapped, so that level would be ceremony in the only catalog a person writes into by hand.
 
-`local` and `rundesk` are **reserved names** and refused at install. `rundesk-skills` deliberately is
+`local` and `rundesk` are **reserved names** and refused at install. `skills` deliberately is
 not: it is installed by fetching it, which is the ordinary path, and reserving it would mean the
 ordinary path had to go round its own rule.
 
@@ -55,7 +62,8 @@ out of step with the first.
 ```text
 data/agents/alan/home/
   skills/
-    writing-plans -> ../../../../skills/rundesk-skills/app/skills/writing-plans
+    writing-plans -> ../../../../skills/acme/app/skills/writing-plans
+    game-design   -> ../../../../skills/skills/app/skills/games/game-design
     acme-plans/                              a copy, granted --as
   .claude/skills/writing-plans -> ../../skills/writing-plans
   .codex/skills/writing-plans  -> ../../skills/writing-plans

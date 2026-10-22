@@ -69,10 +69,10 @@ runs itself as `upload`, because a file has a deadline and only a process can be
 
 | Path | What it is |
 |---|---|
-| `src/skills/` | the bundled `rundesk` catalog: `manifest.json` and 4 packages — `delegating-work`, `managing-github`, `managing-rundesk`, `writing-skills` |
+| `src/skills/` | the bundled `rundesk` catalog: `manifest.json` and 3 packages — `delegating-work`, `managing-rundesk`, `writing-skills` |
 | `src/templates/` | the agent home: an `AGENTS.md`/`CLAUDE.md` pair placed from one source, `MEMORY.md`, and purpose-named area templates for plans, research, retros, scripts, and tasks |
 
-## Tests (tests/ — 88 suites, 3 support modules)
+## Tests (tests/ — 89 suites, 3 support modules)
 
 Directly runnable `unittest` suites. `tests/support.py` gives every case a temporary root, asserts
 that Rundesk resolved that root before the case runs, and points the proxy variables at a closed port

@@ -9,10 +9,11 @@ every case would pass. These builders are deliberately dumb.
 """
 
 import json
+import os
 import shutil
 import tarfile
 from pathlib import Path
-from typing import Dict, Iterable, Optional
+from typing import Dict, Iterable, Optional, Tuple
 
 # Imported for what it does on the way in rather than for anything it exports: `support` is what
 # puts `src/` on the path. Stated here rather than left to the importing suite, because whether this
@@ -85,6 +86,27 @@ def a_published_catalog(at: Path, name: str = "acme", version: str = "1.0.0",
     return at
 
 
+def a_grouped_catalog(at: Path, name: str = "acme", version: str = "1.0.0",
+                      skills: Optional[Dict[str, str]] = None) -> Path:
+    """A published catalog keeping each skill in a group folder, listed in its manifest.
+
+    `skills` maps each skill to its group, so `{"game-design": "games"}` stands one at
+    `skills/games/game-design/` and lists it there. Like `a_published_catalog`, it builds exactly
+    what was asked for and clears what a previous call left.
+    """
+    grouped = {"game-design": "games"} if skills is None else skills
+    shutil.rmtree(at / library.INSIDE, ignore_errors=True)
+    (at / library.INSIDE).mkdir(parents=True, exist_ok=True)
+    written(at / library.MANIFEST, {
+        "schema": library.SCHEMA, "name": name, "version": version,
+        "description": f"Skills for {name}.",
+        "skills": [{"name": one, "path": f"skills/{group}/{one}"}
+                   for one, group in grouped.items()]})
+    for one, group in grouped.items():
+        a_skill(at / library.INSIDE / group / one)
+    return at
+
+
 def a_team_catalog(at: Path, name: str = "test-team", version: str = "1.0.0",
                    members: Optional[Iterable[dict]] = None,
                    skills: Iterable[str] = ("implementing", "reviewing")) -> Path:
@@ -117,3 +139,22 @@ def a_tarball(tree: Path, to: Path, wrapper: str = "") -> Path:
             inside = one.relative_to(tree)
             writing.add(one, arcname=str(Path(wrapper) / inside) if wrapper else str(inside))
     return to
+
+
+def snapshot(at: Path) -> Dict[str, Tuple[str, bytes]]:
+    """Every entry under `at`: each file's bytes and each link's target, keyed by relative path.
+
+    For proving a directory was left byte-identical. Links are read rather than followed, so a
+    grant re-pointed at another catalog shows up as a change even when both targets hold the same
+    bytes.
+    """
+    found: Dict[str, Tuple[str, bytes]] = {}
+    for one in sorted(at.rglob("*")):
+        inside = str(one.relative_to(at))
+        if one.is_symlink():
+            found[inside] = ("link", os.readlink(one).encode("utf-8"))
+        elif one.is_file():
+            found[inside] = ("file", one.read_bytes())
+        else:
+            found[inside] = ("directory", b"")
+    return found

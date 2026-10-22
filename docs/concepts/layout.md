@@ -260,7 +260,9 @@ data/skills/
       skills/managing-rundesk/references/maintenance.md
       skills/managing-rundesk/references/retrospective.md
       skills/managing-rundesk/references/self-improvement.md
-  rundesk-skills/           fetched from GitHub — the general catalog rundesk depends on
+  skills/                   fetched from GitHub — the general catalog rundesk depends on
+    app/manifest.json       lists each skill's name and path
+    app/skills/development/managing-github/SKILL.md   a skill in a group folder
   local/                    yours. Never fetched, never removed by rundesk
     manifest.json
     my-thing/SKILL.md       flat — no app/, because nothing ever swaps this one
@@ -293,11 +295,13 @@ is discarded either way, and a walk over `data/skills/` skips it while it is the
 directory an agent. `catalog.json` deliberately is not: it records where a catalog was *fetched* from,
 and `local` was never fetched from anywhere.
 
-**Which skills a catalog holds is found rather than listed** — every directory under `app/skills/`
-with a `SKILL.md` in it. The build this replaces listed each one in the manifest with its path, so
-three places had to agree about one name: the manifest entry, the directory, and the frontmatter
-inside. They disagreed, and every disagreement was a catalog that installed and then behaved as
-though a skill were not there.
+**Which skills a catalog holds is found, unless its manifest lists them** — with no `skills` list,
+every directory under `app/skills/` with a `SKILL.md` in it. A catalog that keeps skills in group
+folders lists each as `{"name", "path"}`, and the skill stands at `app/<path>`, which must be under
+`app/skills/`. The name, the folder and the frontmatter must agree; a disagreement, a path outside
+`skills/`, a missing `SKILL.md`, a name listed twice or a malformed entry refuses the catalog before
+anything is installed. Every walker — grants, `doctor`, needs and OAuth discovery, update, retiring
+a skill and team catalogs — reads that one index (`library.indexed`), never the path itself.
 
 **Nothing shares a name, because nothing shares a directory.** That flat namespace was the other
 thing the previous build got wrong here: one `data/skills/<name>` for every catalog meant a second
@@ -309,13 +313,15 @@ one name, because a brain finds a skill by its directory name.
 ### Two of them cannot be removed, for two different reasons
 
 `rundesk` ships **inside the release** and is replaced out of it on every install and update. It is
-the product-owned operating catalog: how to operate Rundesk, write its skills, delegate work, and
-deliver work through GitHub. Version-coupled guidance and first-party operating workflows therefore
+the product-owned operating catalog: how to operate Rundesk, write its skills, and delegate work. Version-coupled guidance and first-party operating workflows therefore
 have one canonical source in the CLI. It is never fetched from anywhere, and it is the reason a
 machine with no network finishes installing with working skills.
 
-`rundesk-skills` is **fetched**, like anybody else's catalog. It holds general-purpose guidance
-whose ownership and release cadence are independent of the Rundesk product.
+`skills` is **fetched** from `github.com/rundesk-ai/skills`, like anybody else's catalog. It holds
+general-purpose guidance — `managing-github` among it — whose ownership and release cadence are
+independent of the Rundesk product. It is installed by `install`, and by the settle of the release
+that lands 0.62 on an older install, because the sweep after an update runs the replaced release's
+code. An install carried from 0.61 keeps `rundesk-skills` as an ordinary, removable catalog.
 
 `local` is where your own skills go. Nothing fetches into it, and nothing rundesk does removes it.
 

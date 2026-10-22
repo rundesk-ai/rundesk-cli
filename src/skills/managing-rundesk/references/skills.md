@@ -91,8 +91,10 @@ skill can reach every profile configured for it.
   source of truth: update replaces installed catalog content, including local edits to that fetched
   copy.
 - Removing a catalog also revokes grants pointing into it. Save a backup and inspect the preview.
-- The shipped `rundesk` catalog and required `rundesk-skills` catalog cannot be removed. Rundesk
-  never replaces or removes the owner's `local` catalog.
+- The shipped `rundesk` catalog and required `skills` catalog cannot be removed. Rundesk
+  never replaces or removes the owner's `local` catalog. `rundesk-skills`, required before 0.62,
+  is an ordinary catalog that `skills remove` may take.
+- `managing-github` is granted from `skills/managing-github`; the shipped catalog no longer holds it.
 - Revoking a skill removes the agent's presentation, not the library copy or stored profiles.
 - Rundesk manages the bundled `delegating-work` grant with outbound delegation scope: new agents and
   agents configured for an exact or unrestricted scope hold it; `--delegate-to-none` removes the

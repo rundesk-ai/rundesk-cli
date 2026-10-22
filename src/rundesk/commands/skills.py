@@ -28,7 +28,7 @@ retires three grants the answer is yes.
 import argparse
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from rundesk.agents import directory
 from rundesk.commands import Subcommands, env, failed, print_json
@@ -172,9 +172,26 @@ def refreshed(refreshing: Optional[catalogs.Fetching] = None) -> List[str]:
     build this replaces had `update` reach into the skills group for a *private*, and its own notes
     recorded that as a trap.
     """
+    return _brought_into_line(
+        lambda: catalogs.refresh(refreshing, _out_loud, _dependency_catalog))
+
+
+def required_settled(refreshing: Optional[catalogs.Fetching] = None) -> List[str]:
+    """Place the catalogs this release requires and bring every grant into line with them.
+
+    For the settle of a release that has just landed. The sweep after an update runs in the release
+    being replaced, so without this an install carried from 0.61 would keep depending on the
+    catalog that release named and keep a link to a skill this release no longer ships. Answers
+    the sentences a caller has to print, like `refreshed`, and never fails the caller.
+    """
+    return _brought_into_line(lambda: catalogs.required(refreshing, _out_loud))
+
+
+def _brought_into_line(checked: Callable[[], List[catalogs.Refreshed]]) -> List[str]:
+    """Run one catalog check, then take away and remake the grants it moved, and report."""
     said: List[str] = []
     try:
-        outcomes = catalogs.refresh(refreshing, _out_loud, _dependency_catalog)
+        outcomes = checked()
     except TROUBLE as why:
         return [f"the skill catalogs could not be checked: {why}",
                 "rundesk skills catalogs says what is installed"]
@@ -290,7 +307,7 @@ def _catalogs() -> int:
         print("        none yet — install one with: rundesk skills install <repository>")
         return OK
     as_table(("CATALOG", "VERSION", "SKILLS", "SOURCE"),
-             [(one.name, one.manifest.version, str(len(library.found(library.inside(one.name)))),
+             [(one.name, one.manifest.version, str(len(library.index_of(one.name))),
                _came_from(one)) for one in every])
     return OK
 
@@ -330,8 +347,9 @@ def _would_install(coming: catalogs.Coming) -> int:
     print(f"install: this would install {manifest.name} {manifest.version} from {coming.source}",
           file=sys.stderr)
     print(f"        about    {manifest.description}", file=sys.stderr)
+    standing = library.indexed(coming.at).skills
     for name in coming.skills:
-        wanted = _wanted_by(coming.at / library.INSIDE / name)
+        wanted = _wanted_by(standing[name])
         print(f"        skill    {name}{wanted}", file=sys.stderr)
     print("        none of its skills would be granted to anybody.", file=sys.stderr)
     print("        nothing was installed. To go ahead:", file=sys.stderr)
@@ -409,7 +427,7 @@ def _would_update(name: str, fetching: Optional[catalogs.Fetching]) -> int:
         settled = library.read(name)
         if settled.provenance is None or not catalogs.may_be_fetched(name):
             return _failed(f"{name} is not fetched from anywhere, so there is nothing to check")
-        holding = library.found(library.inside(name))
+        holding = list(library.index_of(name))
         with catalogs.brought(settled.provenance.source, settled.provenance.etag,
                               fetching) as coming:
             # **Asked of `catalogs.brings_a_change` rather than worked out here**, so a preview
@@ -475,7 +493,7 @@ def _removed(name: str, confirm: bool) -> int:
                        f"{', '.join(sorted(dependents))} — update those team declarations before "
                        "removing it")
 
-    holding = library.found(library.inside(name))
+    holding = list(library.index_of(name))
     if not confirm:
         return _would_remove(name, settled, holding)
     try:
@@ -497,7 +515,7 @@ def _dependency_catalog(at: Path, manifest: library.Manifest) -> None:
         dependents = team_catalogs.dependents(manifest.name)
     except (team_catalogs.Refused, library.Refused, OSError) as why:
         raise catalogs.Refused(f"installed team dependencies could not be checked ({why})") from why
-    available = set(library.found(at / library.INSIDE))
+    available = set(library.indexed(at).skills)
     missing = {team: [skill for skill in skills if skill not in available]
                for team, skills in dependents.items()}
     missing = {team: skills for team, skills in missing.items() if skills}
