@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import List, Optional
 from unittest import mock
 
-from fixtures_skills import a_published_catalog, a_team_catalog, written
+from fixtures_skills import a_published_catalog, a_team_catalog, snapshot, written
 
 import support
 from rundesk import __version__
@@ -268,6 +268,30 @@ class UpdateSurfaces(support.Isolated):
         self.assertIn("team catalogs: completed with failures", err)
         self.assertIn("test-team could not be checked", err)
         self.assertEqual(([], []), (gateways.went_down, gateways.came_up))
+
+    def test_a_released_team_is_never_reconciled_again(self):
+        # One update first, so the floor every agent holds is in place before anything is measured:
+        # that floor is the product's, not the team's, and is granted whether or not a team exists.
+        self.assertEqual(OK, self.run_manual(GatewayCycle())[0])
+        code, _out, err = support.run_with(["teams", "release", "test-team", "--confirm"])
+        self.assertEqual(OK, code, err)
+        drifted = directory.home("forge") / "AGENTS.md"
+        drifted.write_text("# forge\n\nThe owner's own edit.\n", encoding="utf-8")
+        members = {name: snapshot(directory.where(name)) for name in ("forge", "piper")}
+        self.publish_second_versions()
+        gateways = GatewayCycle()
+
+        code, out, err = self.run_manual(gateways)
+
+        self.assertEqual(OK, code, err)
+        self.assertIn("team catalogs: checked", out)
+        self.assertEqual([], gateways.went_down)
+        for name, before in members.items():
+            with self.subTest(member=name):
+                self.assertEqual(before, snapshot(directory.where(name)))
+        # Its tree now moves with the ordinary catalogs, and moving it touches no member.
+        self.assertEqual("2.0.0", library.read("test-team").manifest.version)
+        self.assertFalse(library.is_team("test-team"))
 
     def test_daily_coordinator_uses_the_same_surfaces_and_logs_each_outcome(self):
         self.publish_second_versions()

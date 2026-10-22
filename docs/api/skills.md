@@ -23,16 +23,16 @@ one skill and nothing removes one, because a catalog is what somebody publishes 
 ```console
 $ rundesk skills
 skills in /Users/you/.rundesk/data/skills
-CATALOG         SKILL             AGENTS
-rundesk         managing-rundesk  alan, ben
-rundesk         writing-skills    —
-rundesk-skills  writing-plans     alan
-local           my-thing          —
+CATALOG  SKILL                         AGENTS
+rundesk  managing-rundesk              alan, ben
+rundesk  writing-skills                —
+skills   writing-implementation-plans  alan
+local    my-thing                      —
 
-$ rundesk skills grant alan rundesk-skills/writing-plans
-alan holds writing-plans
-        from     rundesk-skills/writing-plans
-        stands   /Users/you/.rundesk/data/agents/alan/home/skills/writing-plans
+$ rundesk skills grant alan skills/writing-implementation-plans
+alan holds writing-implementation-plans
+        from     skills/writing-implementation-plans
+        stands   /Users/you/.rundesk/data/agents/alan/home/skills/writing-implementation-plans
 ```
 
 **A skill is addressed `<catalog>/<skill>`, always.** Two catalogs may both hold `writing-plans`, so a
@@ -49,8 +49,9 @@ who typed the wrong one types the other verb.
 `rundesk` ships inside the release and is replaced out of it on every update — it is how an agent
 operates *this* version, so it is never fetched and never removable. One skill in it,
 `managing-rundesk`, is a floor every agent holds: `revoke` refuses it, and `rundesk update` gives it
-back to an agent standing without one. `rundesk-skills` is the general
-catalog rundesk depends on, fetched like any other and equally undeletable. `local` is yours and
+back to an agent standing without one. `skills` is the general
+catalog rundesk depends on, fetched like any other and equally undeletable. `rundesk-skills`, which
+releases up to 0.61 depended on, is an ordinary catalog from 0.62 and `skills remove` takes it. `local` is yours and
 rundesk never touches it. [`layout.md`](../concepts/layout.md) says why the first two are separate.
 
 Ordinary catalogs are also checked on **every** `rundesk install` and `rundesk update`. An update
@@ -67,15 +68,15 @@ named set of those values — not a suffix on one. Three Jira sites is the case 
 is a URL, an address and a token that only mean anything together.
 
 ```console
-$ rundesk skills configure rundesk-skills/jira --profile acme
+$ rundesk skills configure acme/jira --profile acme
 jira needs 3 values for acme
         JIRA_BASE_URL__ACME   your Jira site, e.g. https://acme.atlassian.net
         >
         ...
 profile acme is complete
 
-$ rundesk skills profiles rundesk-skills/jira
-profiles for rundesk-skills/jira
+$ rundesk skills profiles acme/jira
+profiles for acme/jira
 PROFILE    STANDING    MISSING
 (default)  not set     JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN
 acme       complete    —
@@ -103,15 +104,15 @@ script can run is decided from what is on the disk.
 ```console
 $ rundesk skills doctor
 alan
-  jira           rundesk-skills  PARTIAL   2 of 3 profiles are usable
+  jira           acme            PARTIAL   2 of 3 profiles are usable
       acme  ready
       beta  ready
       gamma  INCOMPLETE
           JIRA_API_TOKEN__GAMMA — an API token from id.atlassian.com
-  writing-plans  rundesk-skills  READY     needs nothing
+  writing-plans  acme            READY     needs nothing
   old-thing      —               DANGLING  the grant points at nothing
 skills: 2 of 3 cannot be used:
-        rundesk skills configure rundesk-skills/jira --profile gamma
+        rundesk skills configure acme/jira --profile gamma
         rundesk skills revoke alan old-thing
 ```
 

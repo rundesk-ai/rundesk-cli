@@ -120,8 +120,10 @@ example, local preview workflow, and publication contract.
 
 #### Supported first-party catalogs
 
-- [`rundesk-skills`](https://github.com/rundesk-ai/rundesk-skills) — engineering, research, design,
-  planning, and operating guidance; installed by default.
+- [`skills`](https://github.com/rundesk-ai/skills) — development, writing, design, research,
+  marketing, stack, and game guidance, including `managing-github`; installed by default.
+- [`rundesk-skills`](https://github.com/rundesk-ai/rundesk-skills) — the earlier general catalog,
+  installed by default before 0.62 and now optional.
 - [`rundesk-skills-apple`](https://github.com/rundesk-ai/rundesk-skills-apple) — guarded Calendar,
   Contacts, Mail, and Messages integrations for macOS.
 - [`rundesk-skills-integrations`](https://github.com/rundesk-ai/rundesk-skills-integrations) —

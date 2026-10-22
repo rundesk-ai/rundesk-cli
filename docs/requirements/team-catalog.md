@@ -1,7 +1,7 @@
 ---
 id: TEAM
 name: Versioned agent teams, and what an install owes their declaration
-last_verified: 2026-08-27
+last_verified: 2026-10-22
 ---
 
 ## What this is
@@ -27,10 +27,12 @@ reconciles is [../teams.md](../concepts/teams.md); this page holds what that mus
 and have not been reviewed by the product owner.** They restate conditions that were already
 written down; the wording is new. R-TEAM-27 was explicitly requested by the product owner on
 2026-08-26, and R-TEAM-5 was rewritten with R-TEAM-28 on 2026-08-27 when the product owner decided a
-member may hold grants the team does not manage. A ✅ names test methods observed to pass on
+member may hold grants the team does not manage. R-TEAM-29 was requested by the product owner on
+2026-10-22. A ✅ names test methods observed to pass on
 2026-08-27 in `test_team_catalogs.py` (11 tests), `test_teams_command.py` (43 tests) and
-`test_update_surfaces.py` (14 tests). A ❌ is not a claim the behavior is absent, only that nothing
-here proves it.
+`test_update_surfaces.py` (14 tests); R-TEAM-29's were observed on 2026-10-22 in
+`test_teams_command.py` (49 tests) and `test_update_surfaces.py` (15 tests). A ❌ is not a claim
+the behavior is absent, only that nothing here proves it.
 
 |  | ID | Requirement | Evidence |
 |:--:|---|---|---|
@@ -62,6 +64,7 @@ here proves it.
 | ❌ | R-TEAM-26 | An agent holding a grant from the team's catalog but declared by no team has that grant put back, and its own pages and records left alone | not proven — no test names this case |
 | ✅ | R-TEAM-27 | A confirmed team update may replace its recorded source without deleting the team or its members; the new source is validated without the old ETag, previewed before mutation, recorded even for identical content, and the old source and member state are restored on failure | `test_update_may_change_the_recorded_source_without_deleting_the_team`, `test_source_change_fetches_and_reconciles_the_new_catalog`, `test_source_change_to_github_does_not_send_the_previous_sources_etag`, `test_source_change_refuses_a_repository_with_another_catalog_name`, `test_failed_source_change_restores_the_original_source_and_members` |
 | ✅ | R-TEAM-28 | A declaration needing an installed name a user-managed grant occupies is refused, at preview and at confirmation, before any dependency, gateway, catalog, page, record, or grant moves, naming the member, the occupying grant, the declared address, and both the revoke and the `--as` regrant that clear it; the same refusal answers a version that lets a member delegate by name while a `delegating-work` grant other than Rundesk's own stands under that name. It is asked only about members the team may govern and only after a newly declared name held by an agent no team manages has been refused with its removal command, and turn admission refuses only the member being admitted | `test_a_name_the_owner_took_refuses_the_update_before_anything_moves`, `test_a_member_turned_outbound_refuses_an_occupied_delegation_name`, `test_an_occupied_grant_name_refuses_one_team_before_a_gateway_moves`, `test_an_unmanaged_name_is_refused_before_its_occupied_grant_name`, `test_turn_admission_refuses_only_the_member_whose_name_is_occupied` |
+| ✅ | R-TEAM-29 | `teams release <team>` previews without `--confirm` and exits non-zero; refuses an unknown team and a catalog that is not a team; and on confirmation removes only the team marker under the install lock, leaving every member's files, records and grants byte-identical, its catalog an ordinary one that skill commands move, and later updates reconciling none of its members | `test_without_confirm_it_previews_changes_nothing_and_exits_non_zero`, `test_an_unknown_team_and_an_ordinary_catalog_are_refused_by_name`, `test_every_member_is_left_byte_identical_and_unmanaged`, `test_once_released_its_catalog_moves_like_any_other`, `test_the_marker_is_asked_again_inside_the_install_lock`, `test_a_released_team_is_never_reconciled_again` |
 
 ## Open questions
 
