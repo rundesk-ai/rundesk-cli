@@ -15,9 +15,12 @@ server puts in its own user agent, and `threadSource` says `rundesk` so the owne
 shows where a thread came from. No credential is read, copied or moved; the owner signs in with
 `codex login` and this never learns how that worked.
 
-Two invocations, sharing almost nothing:
+Five invocations, sharing almost nothing:
 
     --capabilities   what this can do — offline, no account, the same answer every time
+    --account-status normalize the official subscription login status without exposing identity
+    --account-login  run the official interactive login
+    --account-logout run the official logout
     (no argument)    one turn: the prompt arrives as records on stdin, records come back on stdout
 
 ## What was measured rather than assumed
@@ -72,6 +75,13 @@ from pathlib import Path
 #: changes the default transport fails loudly here instead of hanging with nothing on the pipe.
 CODEX = "codex"
 APP_SERVER = ("app-server", "--stdio")
+
+#: Codex can otherwise keep an alias login in the machine-wide keychain. The documented file store
+#: keeps each subscription login inside the provider-owned `CODEX_HOME` Rundesk selected.
+FILE_CREDENTIALS = 'cli_auth_credentials_store="file"'
+
+#: The authenticated status this feature supports: Codex's browser-based subscription login.
+SUBSCRIPTION_LOGIN = "Logged in using ChatGPT"
 
 #: What this says it is, and what the server puts in its own user agent. Honest identification is
 #: the point — see the module docstring on why nothing here pretends to be somebody else.
@@ -180,6 +190,12 @@ def main() -> int:
     if "--capabilities" in sys.argv[1:]:
         say(what_this_can_do())
         return 0
+    if "--account-status" in sys.argv[1:]:
+        return account_status()
+    if "--account-login" in sys.argv[1:]:
+        return account_login()
+    if "--account-logout" in sys.argv[1:]:
+        return account_logout()
     return one_turn()
 
 
@@ -194,7 +210,8 @@ def what_this_can_do() -> dict:
     a vendor upgrade that changes behaviour is visible in the record afterwards rather than being a
     thing somebody has to remember.
     """
-    can = {"tools": True, "resume": True, "model": True, "usage": True, "steer": True}
+    can = {"tools": True, "resume": True, "model": True, "usage": True, "steer": True,
+           "account_aliases": True}
     version = the_version()
     if version:
         can["codex_cli"] = version
@@ -212,6 +229,69 @@ def the_version() -> str:
     return got.stdout.strip().splitlines()[0] if got.stdout.strip() else ""
 
 
+# ── Account boundary ──────────────────────────────────────────────────────────────────────────
+
+def the_environment() -> dict:
+    """Point an explicit alias at its provider-owned Codex home.
+
+    An omitted alias returns the existing environment unchanged. Rundesk and this adapter never
+    read, copy, or interpret the login held inside either home.
+    """
+    env = os.environ.copy()
+    account_home = os.environ.get("RUNDESK_PROVIDER_ACCOUNT_HOME")
+    if account_home:
+        env["CODEX_HOME"] = account_home
+    return env
+
+
+def codex_command(*arguments: str) -> list:
+    """A Codex command using the subscription account Rundesk selected."""
+    argv = [CODEX]
+    if os.environ.get("RUNDESK_PROVIDER_ACCOUNT_HOME"):
+        argv += ["-c", FILE_CREDENTIALS]
+    return argv + list(arguments)
+
+
+def account_status() -> int:
+    """Normalize Codex's subscription-login status without returning account details."""
+    try:
+        got = subprocess.run(codex_command("login", "status"), capture_output=True, text=True,
+                             timeout=VERSION_WITHIN, check=False, env=the_environment())
+    except (OSError, subprocess.SubprocessError):
+        got = None
+    lines = [line.strip() for part in
+             ((got.stdout if got else ""), (got.stderr if got else ""))
+             for line in part.splitlines() if line.strip()]
+    authenticated = SUBSCRIPTION_LOGIN in lines
+    signed_out = "Not logged in" in lines
+    if got and got.returncode == 0 and authenticated and not signed_out:
+        say({"state": "authenticated"})
+        return 0
+    if got and got.returncode == 1 and signed_out and not authenticated:
+        say({"state": "signed_out"})
+        return 0
+    say({"state": "unable_to_check"})
+    return 1
+
+
+def account_login() -> int:
+    """Run Codex's interactive login for the selected subscription account."""
+    try:
+        return subprocess.run(codex_command("login"), check=False,
+                              env=the_environment()).returncode
+    except OSError:
+        return 1
+
+
+def account_logout() -> int:
+    """Run Codex's logout for the selected subscription account."""
+    try:
+        return subprocess.run(codex_command("logout"), check=False,
+                              env=the_environment()).returncode
+    except OSError:
+        return 1
+
+
 # ── One turn ──────────────────────────────────────────────────────────────────────────────────
 
 def one_turn() -> int:
@@ -225,8 +305,8 @@ def one_turn() -> int:
     raw = os.environ.get("RUNDESK_RAW")
     try:
         brain = subprocess.Popen(
-            [CODEX, *APP_SERVER], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=None, text=True, bufsize=1, cwd=where, env=os.environ.copy(),
+            codex_command(*APP_SERVER), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=None, text=True, bufsize=1, cwd=where, env=the_environment(),
             # **`errors="replace"`, and it is not tidiness.** A coding agent reads binary files, and
             # what a tool printed comes back inside `aggregatedOutput` — so one stray byte is a
             # `UnicodeDecodeError` raised *inside* the read, past every guard a caller can put
