@@ -735,6 +735,14 @@ class WhatAShippedSkillMayClaim(Bundled):
                        "never one home note per project",
                        "Combined upkeep contract", "maintenance runs first",
                        "never open the link or target",
+                       "The one exception is a held skill's `SKILL.md` and the references it requires",
+                       "Before opening or natively loading each such file, check path metadata only, never contents",
+                       'skills list "$RUNDESK_AGENT"` lists `<name>` with a FROM catalog, not `—`',
+                       "the `realpath` of the exact path you will open lies inside `<library>/<catalog>/`",
+                       "on the first line of `\"$RUNDESK_COMMAND\" skills`",
+                       "for FROM `<catalog> (--as)`, `skills/<name>` is a real directory, not a symlink",
+                       "does not resolve stays a forbidden link target",
+                       "Never change, replace, or remove a link or its target",
                        "Preserve and list `retros/`, but do not open its entries",
                        "short final required by the combined contract"):
             with self.subTest(phrase=phrase):
@@ -750,6 +758,7 @@ class WhatAShippedSkillMayClaim(Bundled):
         for phrase in ("focused review, not ordinary task overhead",
                        "Maintenance preservation remains in force",
                        "never open a symlink or its target",
+                       "except through the maintenance reference's held-skill exception",
                        "recent messages and turns", "repeated friction", "owner corrections",
                        "failed or blocked outcomes", "public Rundesk commands",
                        "previous `weekly-self-improve-upkeep` scheduled runs", "what went well",
