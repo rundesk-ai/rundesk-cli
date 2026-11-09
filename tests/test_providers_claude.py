@@ -628,6 +628,41 @@ class EveryWayTheBrainSaysItFailed(support.Isolated):
         self.assertNotIn("failure_code", ending)
         self.assertIn("flux capacitor", ending["failure_message"])
 
+    def test_a_sign_in_that_expired_and_could_not_be_refreshed_is_signed_out(self):
+        """It arrives as an ordinary failed turn, like every other way of being signed out, and
+        only a person signing in again fixes it."""
+        said = "Failed to authenticate: OAuth session expired and could not be refreshed"
+        ending, _got = self.failed_with(said)
+        self.assertFalse(ending["ok"])
+        self.assertEqual("signed_out", ending.get("failure_code"))
+        self.assertEqual(said, ending["failure_message"])
+
+    def test_merely_mentioning_oauth_expiry_or_refreshing_is_not_being_signed_out(self):
+        """**The phrase is the whole clause, not its words.** A failure that only mentions one of
+        them is not evidence that the sign-in is gone."""
+        for said in ("OAuth callback did not complete",
+                     "the cached file had expired",
+                     "could not be refreshed: the page timed out",
+                     "Failed to authenticate the webhook signature"):
+            with self.subTest(said=said):
+                ending, _got = self.failed_with(said)
+                self.assertFalse(ending["ok"])
+                self.assertNotIn("failure_code", ending)
+                self.assertEqual(said, ending["failure_message"])
+
+    def test_an_answer_that_quotes_the_expiry_is_still_an_answer(self):
+        """Only a failed `result` line is read for a reason, so the words in a turn that worked
+        never make it one that failed."""
+        said = "Failed to authenticate: OAuth session expired and could not be refreshed"
+        at = self.home / "quoted.jsonl"
+        at.write_text("\n".join(a_turn(it_said(said), result=said)) + "\n", encoding="utf-8")
+        records, _got = replayed(self.home, captured=at)
+        ending = records[-1]
+        self.assertTrue(ending["ok"])
+        self.assertNotIn("failure_code", ending)
+        self.assertNotIn("failure_message", ending)
+        self.assertEqual([said], [one["text"] for one in only(records, "text")])
+
     def test_a_failed_turn_hands_back_no_handle_to_carry_it_on_with(self):
         """This adapter mints the id before the first byte, so a conversation whose turn failed may
         never have been created — and handing one back poisons every turn after it."""

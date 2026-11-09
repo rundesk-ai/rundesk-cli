@@ -578,6 +578,19 @@ turn go past shows nothing at all.
 
 **Do not put a prompt or a secret on a command line.** Every process on the machine can read one.
 
+**Your vendor's own control markup is yours to take out.** A brain writes markup its own surface
+renders as something — a link, a button — and rundesk carries a `text` record to a chat platform
+unchanged, because the seam names no vendor and must not learn one. So markup you relay arrives in
+front of a person as literal characters. The shipped codex adapter has two: it turns
+`:codex-file-citation{path="…"}` into the file it names, and omits `:codex-followup[…]{prompt="…"}`
+whole — label, prompt and the bullet it stood on, because a label with no button under it is the
+text of something nobody can press. **Take out the line too, but only where nothing except its list
+marker is left**: markup that was a list otherwise leaves a run of bare `-`, while a directive
+standing inside a sentence loses only itself, because the words around it are the answer. **Match a
+directive and not its name** — an agent explaining your syntax is answering a question, and a
+pattern loose enough to hit the bare word puts a hole in that sentence. A message left with nothing
+in it is not said at all, and rundesk's rule for a turn that closed on nothing takes it from there.
+
 ### Terms of service — a design invariant
 
 rundesk runs the vendor's own published CLI, as the owner, signed in the way the vendor intends,
