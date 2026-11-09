@@ -61,7 +61,7 @@ SHIPPED_IN = "skills"
 
 #: Where the general catalog rundesk depends on is fetched from. Not the product-owned operating
 #: catalog, which ships inside the release and is never fetched from anywhere.
-DEPENDED_SOURCE = "https://github.com/rundesk-ai/rundesk-skills"
+DEPENDED_SOURCE = "https://github.com/rundesk-ai/skills"
 
 #: What `local` says it is. Written by the install, because a catalog is a directory holding a
 #: manifest and the owner's own skills are a catalog like any other.
@@ -229,8 +229,9 @@ def reserved(name: str) -> str:
     this refuses. Putting the rule in the mechanism made it refuse its own legitimate caller, which
     is the shape of thing that gets "fixed" with a flag that turns the check off.
 
-    `rundesk-skills` is deliberately *not* reserved: it is installed by fetching it, which is the
-    ordinary path, and reserving it would mean the ordinary path had to go round its own rule.
+    `skills`, the catalog rundesk depends on, is deliberately *not* reserved: it is installed by
+    fetching it, which is the ordinary path, and reserving it would mean the ordinary path had to go
+    round its own rule.
     """
     if name == library.MINE:
         return (f"{name} is where your own skills stand and is not installed from anywhere — put a "
@@ -386,7 +387,7 @@ def updated(name: str, coming: Coming, saying: Optional[Callable[[str], None]] =
     if settled.provenance is None:
         raise Refused(f"nothing is written down about where {name} came from")
     was = library.read_manifest(settled.at / library.TREE)
-    holding = library.found(library.inside(name))
+    holding = list(library.index_of(name))
     said = saying or (lambda _line: None)
     up_to_date = f"{name} {was.version}: up to date"
     unmoved = Installed(name, was.version, was.version, holding, [], False)
@@ -432,6 +433,21 @@ def promoted(name: str, coming: Coming, saying: Optional[Callable[[str], None]] 
     return moved
 
 
+def released(name: str) -> None:
+    """Stop managing a team catalog as a team, leaving its tree and every agent exactly as they are.
+
+    The team marker beside the tree is the whole of the team link, so taking it away under the
+    install lock is the whole of a release: `team.json` stays in the tree and is read by nothing,
+    and the catalog is from then on one that `skills update` and `skills remove` may move. Asked
+    again inside the lock, so a release cannot race a team update that is reconciling it.
+    """
+    library.read(name)
+    with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
+        if not library.is_team(name):
+            raise Refused(f"{name} is a skill catalog, not a team")
+        (library.stands(name) / library.TEAM_MARKER).unlink()
+
+
 def remove(name: str) -> List[str]:
     """Take a catalog away whole. Returns the skills that went with it.
 
@@ -441,7 +457,7 @@ def remove(name: str) -> List[str]:
     settled = library.read(name)
     if not may_be_removed(name):
         raise Refused(_why_it_stays(name))
-    holding = library.found(library.inside(name))
+    holding = list(library.index_of(name))
     with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
         going = files.outgoing_of(settled.at)
         files.discard(going)
@@ -602,6 +618,34 @@ def refresh(fetching: Optional[Fetching] = None,
     fine, and this is what makes that true rather than what hopes it.
     """
     said = saying or (lambda _line: None)
+    outcomes = required(fetching, said)
+    for name in library.known():
+        if not may_be_fetched(name):
+            continue
+        # Team catalogs own agent state as well as skills. Moving only their fetched tree would
+        # split the source from the agents it governs, so only `rundesk teams update` checks them.
+        if library.is_team(name):
+            continue
+        try:
+            did = update(name, fetching, said, validating)
+            outcomes.append(Refreshed(name, did.before, did.after, did.retired, ""))
+        except (Refused, library.Refused, archives.Refused, OSError,
+                urllib.error.URLError) as why:
+            outcomes.append(Refreshed(name, "", "", [], str(why)))
+            said(f"{name} could not be checked: {why}")
+    return outcomes
+
+
+def required(fetching: Optional[Fetching] = None,
+             saying: Optional[Callable[[str], None]] = None) -> List[Refreshed]:
+    """Put the three catalogs this release cannot be without in place. Answers only failures.
+
+    The first part of `refresh`, and on its own for the release that has just landed: the catalog
+    sweep after an update runs in the *previous* release's process, so a release that changes which
+    catalog it depends on, or stops shipping a skill, has only its own settle to make that true in.
+    Each catalog is guarded on its own, for the reason `refresh` gives.
+    """
+    said = saying or (lambda _line: None)
     outcomes: List[Refreshed] = []
     try:
         place_mine(said)
@@ -618,21 +662,6 @@ def refresh(fetching: Optional[Fetching] = None,
         depended(fetching, said)
     except (Refused, library.Refused, archives.Refused, OSError, urllib.error.URLError) as why:
         outcomes.append(Refreshed(library.DEPENDED, "", "", [], str(why)))
-
-    for name in library.known():
-        if not may_be_fetched(name):
-            continue
-        # Team catalogs own agent state as well as skills. Moving only their fetched tree would
-        # split the source from the agents it governs, so only `rundesk teams update` checks them.
-        if library.is_team(name):
-            continue
-        try:
-            did = update(name, fetching, said, validating)
-            outcomes.append(Refreshed(name, did.before, did.after, did.retired, ""))
-        except (Refused, library.Refused, archives.Refused, OSError,
-                urllib.error.URLError) as why:
-            outcomes.append(Refreshed(name, "", "", [], str(why)))
-            said(f"{name} could not be checked: {why}")
     return outcomes
 
 
@@ -738,25 +767,25 @@ def _checked(tree: Path, name: str) -> List[str]:
     refused here too: a repository pointed at the wrong branch installs silently otherwise, and the
     symptom arrives days later as an agent that does not know something.
     """
-    holding = library.found(tree / library.INSIDE)
-    if not holding:
+    index = library.indexed(tree)
+    if not index.skills and not index.trouble:
         raise Refused(f"{name} declares no skills — there is nothing under "
                       f"{library.INSIDE}/ holding a {library.DECLARED}")
-    trouble = []
-    for one in holding:
-        why = needs.env_trouble(tree / library.INSIDE / one)
+    trouble = list(index.trouble)
+    for at in index.skills.values():
+        why = needs.env_trouble(at)
         if why:
             trouble.append(why)
         # Checked at the door rather than at login. `skills.oauth.discovered` deliberately tolerates
         # a broken declaration already on disk so one catalog cannot break every other provider;
         # accepting one *into* an install is where the strict answer belongs.
-        why = oauth.trouble_with(tree / library.INSIDE / one)
+        why = oauth.trouble_with(at)
         if why:
             trouble.append(why)
     if trouble:
         raise Refused(f"{name} holds {len(trouble)} skill(s) that cannot be used: "
                       + "; ".join(trouble))
-    return holding
+    return list(index.skills)
 
 
 def _the_tree_in(at: Path) -> Path:

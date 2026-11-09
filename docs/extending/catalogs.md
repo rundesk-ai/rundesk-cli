@@ -301,7 +301,6 @@ the site before the token, the way a person would set it up.
 
 | Not here | Why |
 |---|---|
-| a `skills` list in the manifest | skills are found by walking `skills/`; a list is a second thing to keep in step with a directory |
 | `optional` | declare what is required. A value your script uses if it happens to be there is your business, and `SKILL.md` is where you say so |
 | per-script needs | one declaration per skill. Two granularities is two ways to be inconsistent |
 | a profile declaration | profiles are found from what is stored, so adding an account needs no edit to your catalog |
@@ -385,7 +384,7 @@ beside the provider and channel adapters, and pre-installed on every machine:
 ```text
 src/skills/                       in the release — what a checkout holds
 ├── manifest.json
-├── managing-github/SKILL.md
+├── delegating-work/SKILL.md
 ├── managing-rundesk/SKILL.md
 └── writing-skills/SKILL.md
 ```
@@ -404,8 +403,9 @@ reads a special way.
 
 **It is replaced out of the release on every install and every update**, whether or not the release
 moved — so a skill edited in place, or deleted, is put back. It is the product-owned operating
-catalog: version-coupled Rundesk guidance and first-party delivery workflows have one canonical
-source in the CLI instead of being borrowed from a general catalog.
+catalog: version-coupled Rundesk guidance has one canonical source in the CLI instead of being
+borrowed from a general catalog. GitHub delivery (`managing-github`) left it in 0.62 and is
+maintained in the `skills` catalog every install depends on.
 
 ## Publishing a catalog
 
@@ -437,12 +437,47 @@ version and this release accepts `1`. A manifest declaring any other schema is *
 read hopefully** — a field this release has never seen might be the one saying where the skills are,
 and a hopeful reading installs an empty catalog while reporting success.
 
-**Which skills it holds is found, not listed.** Every directory under `skills/` with a `SKILL.md` in
-it. Adding one is a directory appearing.
+**Which skills it holds is found, unless the manifest lists them.** With no `skills` field, every
+directory directly under `skills/` with a `SKILL.md` in it — adding one is a directory appearing.
 
-A manifest carrying a `skills` list is still read — the published `rundesk-skills` catalog has one,
-and rundesk ignores it rather than refusing it. Nothing is gained by keeping one in step with the
-directory beside it, which is the whole reason the list stopped being the answer.
+A catalog that keeps skills in group folders lists every one, and only listed skills are installed:
+
+```text
+skills/
+├── manifest.json
+└── skills/
+    ├── games/game-design/SKILL.md
+    └── development/managing-github/SKILL.md
+```
+
+```json
+{
+  "schema": 1,
+  "name": "skills",
+  "version": "1.0.0",
+  "description": "General-purpose skills for any coding agent.",
+  "skills": [
+    {"name": "game-design", "path": "skills/games/game-design"},
+    {"name": "managing-github", "path": "skills/development/managing-github"}
+  ]
+}
+```
+
+A skill is keyed and granted by its `name` — `skills/game-design`, never by its group — so the
+`name`, the last folder of its `path`, and its `SKILL.md` frontmatter `name` must be the same.
+Each entry is exactly `name` and `path`. The install refuses, naming every problem at once:
+
+| Refusal | Means |
+|---|---|
+| `lists a malformed skill entry` | an entry that is not an object with exactly a string `name` and `path`, or a `skills` field that is not a list |
+| `which is not a folder under skills/` | a path that is absolute, uses `.` or `..`, or does not start with `skills/` |
+| `which reaches outside this catalog` | a path that resolves, through a link, outside the tree's `skills/` |
+| `whose folder is called` | a `name` that is not the last folder of its `path` |
+| `and there is no SKILL.md there` | a listed folder without a `SKILL.md` |
+| `lists <name> more than once` | one name listed twice |
+
+Moving a skill between group folders keeps every grant of it: the next update points each link at
+where the skill now stands. Removing it from the list retires it like deleting its directory.
 
 A catalog holding **no** skills is refused. A repository pointed at the wrong branch would otherwise
 install in silence, and the symptom arrives days later as an agent that does not know something.
@@ -521,7 +556,8 @@ would go on being described as holding something it cannot use.
 | It says | It means |
 |---|---|
 | `there is no manifest.json at the top of what was fetched` | the repository root has no manifest, or the archive has more than one directory in it |
-| `declares no skills` | nothing under `skills/` holds a `SKILL.md` |
+| `declares no skills` | nothing under `skills/` holds a `SKILL.md`, or the manifest's `skills` list is empty |
+| `holds N skill(s) that cannot be used: … manifest.json …` | a listed entry is refused; the table under [Publishing a catalog](#publishing-a-catalog) says why each one is |
 | `holds N skill(s) that cannot be used` | each one is named, with what is wrong: a frontmatter name that does not match its directory, a missing description, or a `rundesk.json` that will not parse |
 | `is already installed` | use `rundesk skills update <catalog>` |
 | `calls itself X and this install has it as Y` | the manifest was renamed; install it under the new name and remove the old |

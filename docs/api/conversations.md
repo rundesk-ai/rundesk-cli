@@ -98,10 +98,15 @@ wakes a review turn. What ava gets is bob's last complete message, verbatim and 
 summarises nothing and asserts nothing about it — and nothing bob wrote reaches any person until ava
 has reviewed it.
 
-Collection settles the delegation only after the asking turn durably admits that returned result.
-If a turn ends after claiming the result but before admission, the next gateway pass reoffers the
-same result message to one fallback review turn rather than leaving the delegation `working` or
-creating a duplicate.
+Collection settles the delegation once that result is durably recorded in ava's own conversation,
+which is not the same moment as a turn reading it. An agent already running a turn nothing can speak
+to — a scheduled run is a process of its own — would otherwise leave the work `working` for as long
+as that turn lasts, and for ever where that turn is itself waiting on the delegation. The review is
+still owed: a later pass offers the same recorded result until exactly one review turn takes it.
+
+A result a turn has already claimed stays that turn's. If that turn ends after claiming the result
+but before admission, the next gateway pass reoffers the same result message to one fallback review
+turn rather than creating a duplicate.
 
 **Six things are refused**, each with what to type instead:
 

@@ -1038,6 +1038,19 @@ def _delegated_prompt(agent: str, conversation: int, delegator: str) -> Tuple[st
     return turns.delegated_prompt(agent, conversation, delegator)
 
 
+def _still_owed_a_review(agent: str, conversation: int, message: int) -> bool:
+    """Whether the recorded result is the asking agent's and still waiting for a turn.
+
+    Unclaimed is the whole of the question. A message no turn holds is one a later pass may offer
+    again; one a turn holds is that turn's to admit or to give back, which is `review_this`'s first
+    branch and stays there. A record that cannot be read at all is not an answer that came back.
+    """
+    try:
+        return arriving.turn_for_message(agent, conversation, message) is None
+    except (records.NotThere, records.Unreadable, OSError):
+        return False
+
+
 class OnADelegation(IntoAChannel):
     """Runs the two turns a delegation needs. Handed to `delegations.hosting.looked`.
 
@@ -1066,6 +1079,12 @@ class OnADelegation(IntoAChannel):
     delegation conversation arrived on no channel, so there is nobody to tell and nothing here has to
     know it is the far side of somebody else's ask.
     """
+
+    def __init__(self, where: Path, hosted: Callable[[], hosting.Watching]):
+        super().__init__(where, hosted)
+        #: Where each agent's walk through its unread results stopped, by agent name. See
+        #: `recorded_reviews`: a fairness position, not a record of anything.
+        self._reviewing: Dict[str, int] = {}
 
     def answer_this(self, agent: str, conversation: int, delegation_id: str,
                     delegator: str, provider_name: Optional[str] = None,
@@ -1103,13 +1122,21 @@ class OnADelegation(IntoAChannel):
         it is a turn: an answer delivered only as a prompt would be one no `rundesk messages` could
         find, and the review turn is not guaranteed to happen at all if the agent is being torn
         down this second.
+
+        **`True` once the answer is durably the asking agent's, which is not the same as reviewed.**
+        A turn already running in that conversation may be one nothing can speak to — a scheduled
+        turn runs in a process of its own, and `_speaking_to` is this process's — so waiting for a
+        review before saying the answer came back leaves the delegation `working` for as long as
+        that turn lasts, and deadlocks outright when the turn is itself waiting on this delegation.
+        The recorded message is offered again by `recorded_reviews` until a turn takes it, and the
+        claim on that one row is what keeps it one review.
         """
         said = REVIEW.format(
             agent=from_agent, answer=answer,
             provenance=_delegation_provenance(answer))
         landed = arriving.said_by_rundesk_into(
             agent, conversation, said,
-            external_id=f"delegation-result:{delegation_id}:{answer_id}"
+            external_id=f"{arriving.A_DELEGATION_RESULT}{delegation_id}:{answer_id}"
             if delegation_id and answer_id else None)
         owning_turn = arriving.turn_for_message(agent, conversation, landed.message)
         if owning_turn is not None:
@@ -1132,7 +1159,61 @@ class OnADelegation(IntoAChannel):
         threading.Thread(target=self._reviewed, name=f"review-{from_agent}",
                          args=(agent, conversation, said, from_agent, landed, admitted),
                          daemon=True).start()
-        return admitted.wait(REVIEW_ADMITTED_WITHIN) is True
+        if admitted.wait(REVIEW_ADMITTED_WITHIN) is True:
+            return True
+        return _still_owed_a_review(agent, conversation, landed.message)
+
+    def recorded_reviews(self, agent: str, most: int, looking_at: int) -> Tuple[str, ...]:
+        """At most `most` delegations owed a review, found by reading no more than `looking_at`
+        recorded results and continuing from where the last call stopped.
+
+        **`most` is here rather than left to the caller because the walk has to move by what was
+        handed over.** A caller can only act on so many a pass; handing back more and remembering
+        the end of the window would move the position past answers nobody looked at, and handing
+        back more and remembering the *window* would leave the position at the same two candidates
+        for ever whenever everything fits in one look — which is a delegation behind two answers
+        whose target cannot be read, or whose review will not start, waiting for ever while the log
+        says so twice a beat. So the position follows the last candidate handed over, and what
+        became of it — read, skipped, refused — is not this layer's to know.
+
+        Where the walk begins again is decided by a look that **read nothing**, never by one that
+        merely had room to spare: a short look that still handed candidates over has rows behind
+        those candidates, and starting again at the head would be the same defect said differently.
+
+        **The position is this process's and is not written down.** Nothing is decided from it —
+        every delegation is offered exactly as it would be if this were empty, and the worst a lost
+        one can do is read the oldest end again — so it is a fairness aid rather than state, the
+        same standing `delegations.hosting.Carrying` has.
+
+        Busy is asked here rather than by the caller because it is the same question `_take` would
+        spend its whole retry on a moment later: a conversation with a turn in it takes nothing, and
+        a pass that found that out the expensive way would hold the gateway's beat for every answer
+        an agent is waiting on. Once per conversation, because the answer is the same for every
+        result standing in it, and a candidate passed over this way is behind the position rather
+        than pinned to it.
+        """
+        after = self._reviewing.get(agent, 0)
+        try:
+            window = arriving.pending_delegation_results(agent, after, looking_at)
+        except (records.NotThere, records.Unreadable, OSError):
+            return ()
+        working: Dict[int, bool] = {}
+        handed: List[arriving.Owed] = []
+        for one in window.owed:
+            if len(handed) >= most:
+                break
+            if one.conversation not in working:
+                working[one.conversation] = turns.busy(agent, one.conversation)
+            if not working[one.conversation]:
+                handed.append(one)
+        if handed:
+            self._reviewing[agent] = handed[-1].message
+        elif window.reached > after:
+            self._reviewing[agent] = window.reached
+        else:
+            # Nothing at all after the position, which is the one thing that means the walk is over.
+            self._reviewing[agent] = 0
+        return tuple(one.delegation_id for one in handed)
 
     def showed(self, agent: str, conversation: int, state: str, to_agent: str,
                delegation_id: str, seconds: Optional[int] = None,

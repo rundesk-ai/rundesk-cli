@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 from unittest import mock
 
-from fixtures_skills import a_published_catalog, a_team_catalog, written
+from fixtures_skills import a_published_catalog, a_team_catalog, snapshot, written
 
 import support
 from rundesk.agents import delegating, directory, records
@@ -990,6 +990,99 @@ class Teams(support.Isolated):
             self.assertEqual(OK, self.command("install"))
         self.assertEqual(["forge", "piper"], directory.known())
         self.assertTrue(library.is_team("test-team"))
+
+
+class ReleasingATeam(support.Isolated):
+    """`teams release` takes the team marker away and leaves every member exactly as it stands.
+
+    Its own case rather than a subclass of `Teams`, which would run every one of those cases again.
+    """
+
+    command = Teams.command
+    an_owner_catalog = Teams.an_owner_catalog
+    a_second_version = Teams.a_second_version
+
+    def setUp(self) -> None:
+        super().setUp()
+        library.where().mkdir(parents=True)
+        self.source = a_team_catalog(self.home / "published")
+        self.assertEqual(OK, self.command("install"))
+        self.an_owner_catalog()
+        grants.granted("forge", library.look_up("other/extra"))
+
+    def released(self, *also: str):
+        return support.run_with(["teams", "release", "test-team", *also])
+
+    def test_without_confirm_it_previews_changes_nothing_and_exits_non_zero(self):
+        before = snapshot(paths.data())
+        code, out, err = self.released()
+        self.assertEqual(FAILED, code)
+        self.assertEqual("", out)
+        self.assertIn("release: this would stop managing team test-team", err)
+        self.assertIn("keep     forge", err)
+        self.assertIn("rundesk teams release test-team --confirm", err)
+        self.assertTrue(library.is_team("test-team"))
+        self.assertEqual(before, snapshot(paths.data()))
+
+    def test_an_unknown_team_and_an_ordinary_catalog_are_refused_by_name(self):
+        code, _out, err = support.run_with(["teams", "release", "nobody", "--confirm"])
+        self.assertEqual(FAILED, code)
+        self.assertIn("there is no team called nobody", err)
+        code, _out, err = support.run_with(["teams", "release", "other", "--confirm"])
+        self.assertEqual(FAILED, code)
+        self.assertIn("other is a skill catalog, not a team", err)
+
+    def test_every_member_is_left_byte_identical_and_unmanaged(self):
+        members = {name: snapshot(directory.where(name)) for name in ("forge", "piper")}
+        held = {name: [one.address for one in grants.held(name)] for name in ("forge", "piper")}
+        code, out, err = self.released("--confirm")
+        self.assertEqual(OK, code, err)
+        self.assertIn("team test-team released", out)
+        self.assertFalse(library.is_team("test-team"))
+        self.assertFalse((library.stands("test-team") / library.TEAM_MARKER).exists())
+        self.assertTrue((library.tree("test-team") / library.TEAM).is_file())
+        for name, before in members.items():
+            with self.subTest(member=name):
+                self.assertEqual(before, snapshot(directory.where(name)))
+                self.assertEqual(held[name], [one.address for one in grants.held(name)])
+        self.assertEqual({}, reconcile_owners())
+        code, out, _err = support.run_with(["teams"])
+        self.assertIn("no teams yet", out)
+
+    def test_once_released_its_catalog_moves_like_any_other(self):
+        self.assertEqual(OK, self.released("--confirm")[0])
+        self.a_second_version()
+        code, _out, err = support.run_with(["skills", "update", "test-team", "--confirm"])
+        self.assertEqual(OK, code, err)
+        code, out, err = support.run_with(["skills", "remove", "test-team", "--confirm"])
+        self.assertEqual(OK, code, err)
+        self.assertIn("forge no longer holds implementing", out)
+        self.assertEqual(["forge", "piper"], directory.known())
+
+    def test_releasing_twice_refuses_the_second_time(self):
+        self.assertEqual(OK, self.released("--confirm")[0])
+        code, _out, err = self.released("--confirm")
+        self.assertEqual(FAILED, code)
+        self.assertIn("test-team is a skill catalog, not a team", err)
+
+    def test_the_marker_is_asked_again_inside_the_install_lock(self):
+        observed = []
+        real = skill_catalogs.library.is_team
+
+        def is_team(name: str) -> bool:
+            observed.append(locking.is_held(paths.lock()))
+            return real(name)
+
+        with mock.patch.object(skill_catalogs.library, "is_team", is_team):
+            skill_catalogs.released("test-team")
+        self.assertIn(True, observed)
+        self.assertFalse(real("test-team"))
+
+
+def reconcile_owners() -> dict:
+    """Which agents an installed team manages, read the way reconciliation reads it."""
+    from rundesk.teams import catalogs as team_catalogs
+    return team_catalogs.owners()
 
 
 if __name__ == "__main__":

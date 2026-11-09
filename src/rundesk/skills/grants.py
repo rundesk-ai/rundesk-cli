@@ -2,7 +2,7 @@
 
     data/agents/alan/home/
       skills/                                  the grant itself, and the source of truth
-        writing-plans -> ../../../../skills/rundesk-skills/app/skills/writing-plans
+        writing-plans -> ../../../../skills/acme/app/skills/writing-plans
         acme-plans/                            a copy, granted --as (see below)
       .claude/skills/writing-plans -> ../../skills/writing-plans
       .codex/skills/writing-plans  -> ../../skills/writing-plans
@@ -59,7 +59,7 @@ from typing import Callable, Dict, Iterable, List, NamedTuple, Optional, Set, Tu
 
 from rundesk.agents import delegating, directory, records
 from rundesk.core import paths
-from rundesk.skills import library
+from rundesk.skills import catalogs, library
 from rundesk.utils import files, locking, terminal
 
 #: Where an agent's grants stand, inside its own home. The name is not a vendor's and is read by no
@@ -352,7 +352,7 @@ def retired(catalog: str, gone: List[str]) -> Dict[str, List[str]]:
     something it cannot use.
 
     **Matched on where the grant points rather than on its name**, so an agent holding
-    `acme/writing-plans` keeps it when `rundesk-skills/writing-plans` goes away. The name is the same
+    `acme/writing-plans` keeps it when `other/writing-plans` goes away. The name is the same
     and the skill is not, and a match on the name would revoke the wrong one.
     """
     if not gone:
@@ -438,8 +438,8 @@ def stale(grant: Grant) -> bool:
         # this directory here, so it is read as something the owner made — and remaking it would be
         # overwriting work this cannot prove is its own. The same reasoning as the narrow pruning.
         return False
-    source = library.inside(grant.catalog) / grant.skill
-    if not (source / library.DECLARED).is_file():
+    source = library.index_of(grant.catalog).get(grant.skill)
+    if source is None or not (source / library.DECLARED).is_file():
         # Dangling, which is a different answer and a different sentence. Reporting it out of date
         # would send somebody to a command that cannot help — there is nothing to remake it from.
         return False
@@ -502,6 +502,88 @@ def _agents_hold_what_they_must(agents: Iterable[str], said: Callable[[str], Non
             said(f"took {library.DELEGATING} from {agent}, because it is inbound-only")
 
 
+def relocated(catalog: str, saying: Optional[Callable[[str], None]] = None) -> List[str]:
+    """Point every linked grant of `catalog` at where its skill now stands. Returns what was said.
+
+    For the team lifecycle, which swaps a team catalog's tree without running `refreshed`: a team
+    whose catalog moved its skills into group folders would otherwise leave each member holding a
+    link to where a skill used to be.
+    """
+    said = saying or (lambda _line: None)
+    changed: List[str] = []
+
+    def record(line: str) -> None:
+        changed.append(line)
+        said(line)
+
+    with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
+        moved = _relocated(directory.known(), record, catalog)
+    for agent in moved:
+        presented(agent)
+    return changed
+
+
+def _relocated(agents: Iterable[str], said: Callable[[str], None],
+               catalog: Optional[str] = None) -> List[str]:
+    """Point linked grants at where their skill now stands. **Caller holds the lock.** Returns the
+    agents whose grants changed.
+
+    Two ordinary updates leave a link behind, and neither is anybody's mistake. A catalog that moves
+    its skills into group folders keeps every name and moves every directory; a skill this release
+    stopped shipping in `rundesk` now lives in `skills`. Either way the grant is still wanted and
+    only where it points is wrong, so it is pointed again rather than revoked.
+
+    **A shipped skill that went nowhere is taken away and said**, rather than left dangling: a link
+    every brain skips is an agent described as holding something it cannot use. Only a link whose
+    skill is gone from both the installed `rundesk` tree and this release counts, so a tree that
+    failed to be placed never costs anybody a grant. A copy, an owner's own entry, and a link under
+    another name are left exactly as they are.
+    """
+    indexes: Dict[str, Dict[str, Path]] = {}
+
+    def index_of(name: str) -> Dict[str, Path]:
+        if name not in indexes:
+            indexes[name] = library.index_of(name)
+        return indexes[name]
+
+    changed: List[str] = []
+    for agent in agents:
+        for one in held(agent):
+            if one.copied or not one.at.is_symlink() or not one.address or one.name != one.skill:
+                continue
+            if catalog is not None and one.catalog != catalog:
+                continue
+            now = index_of(one.catalog).get(one.skill)
+            if now is not None:
+                if _linked_at(one.at) != Path(os.path.normpath(str(now))):
+                    _relinked(one.at, now)
+                    said(f"pointed {agent}'s {one.name} at where {one.address} now stands")
+                    changed.append(agent)
+                continue
+            if (one.catalog != library.BUNDLED or one.resolves
+                    or (catalogs.shipped() / one.skill / library.DECLARED).is_file()):
+                continue
+            moved = index_of(library.DEPENDED).get(one.skill)
+            if moved is not None:
+                _relinked(one.at, moved)
+                said(f"gave {agent} {library.DEPENDED}/{one.skill} in place of {one.address}, "
+                     "which this release no longer ships")
+            else:
+                files.remove_one(one.at)
+                said(f"took {one.address} from {agent} — this release no longer ships it, and "
+                     f"{library.DEPENDED} is not installed to hold it")
+            changed.append(agent)
+    return sorted(set(changed))
+
+
+def _relinked(at: Path, to: Path) -> None:
+    """Point the link at `at` to `to`, replacing it in one rename so it is never briefly absent."""
+    building = files.incoming_of(at)
+    files.discard(building)
+    building.symlink_to(os.path.relpath(to, at.parent))
+    os.replace(building, at)
+
+
 def required_reconciled(agent: str, saying: Optional[Callable[[str], None]] = None) -> List[str]:
     """Align product-required grants and provider links for one agent, and nobody else.
 
@@ -551,12 +633,13 @@ def refreshed(saying: Optional[Callable[[str], None]] = None) -> List[str]:
     # agent, and a caller holding it for the duration is a caller nothing can interleave with.
     with locking.only_one(paths.lock(), "this install", locking.WHILE_A_DIRECTORY_MOVES):
         agents = directory.known()
+        _relocated(agents, said)
         _agents_hold_what_they_must(agents, said)
         for agent in agents:
             for one in held(agent):
                 if not stale(one):
                     continue
-                source = library.inside(one.catalog) / one.skill
+                source = library.index_of(one.catalog)[one.skill]
                 _copied(library.read_skill(one.catalog, source), one.at)
                 remade.append(f"{agent}/{one.name}")
                 said(f"made {one.name} again for {agent}, from {one.catalog}")
@@ -647,8 +730,11 @@ def _pointed_at(at: Path) -> Tuple[str, str]:
     # `<catalog>/app/skills/`, and `local` is flat — see `library.inside`. Matched against what that
     # catalog really is rather than against a length, so a link into `local` cannot be read as a
     # four-part path that happens to be short and a fetched catalog cannot be read as flat.
-    if len(parts) == 4 and parts[1] == library.TREE and parts[2] == library.INSIDE:
-        return parts[0], parts[3]
+    #
+    # A listed catalog may stand a skill in a group folder, `app/skills/<group>/<skill>`, and the
+    # skill is still named by its own folder — `library.indexed` refuses an entry where it is not.
+    if len(parts) >= 4 and parts[1] == library.TREE and parts[2] == library.INSIDE:
+        return parts[0], parts[-1]
     if len(parts) == 2 and parts[0] == library.MINE:
         return parts[0], parts[1]
     return "", ""

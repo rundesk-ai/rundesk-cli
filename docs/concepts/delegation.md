@@ -40,6 +40,32 @@ pass starts at most **4** and collects at most **4**: a gateway that came up to 
 must not spend its whole first pass on them and answer nobody. The rest are still there on the next
 beat.
 
+A third pass stands on the collecting side: an answer already recorded that no turn has read is
+offered for review again. It settles nothing — see
+[the states one can get stuck in](#the-states-one-can-get-stuck-in) for why an answer is durable
+before it is read — and it is bounded twice, because the two costs are different:
+
+| Bound | What it holds |
+|---|---|
+| **32** read | the rows one pass reads to find candidates, as one indexed seek |
+| **2** taken | the candidates it hands to the sweep, and so the delegation rows it reads |
+| **2** tried | the answers it then acts on — another store read, a turn, a log line — spent by an attempt whether or not it succeeds |
+
+**The walk moves by what it handed over.** Work carried on, stopped or forgotten keeps its recorded
+result for as long as the history does; so does one whose target cannot be read, and one whose
+review will not start. The oldest end is where all of those collect, so the position has to leave
+them behind whatever became of them — read, passed over as busy, refused. It follows the last
+candidate a pass was given, or the end of what that pass read when it was given none.
+
+**A pass that reads nothing after the position is the only thing that begins it again.** A look with
+room to spare is not the end of anything: it can still have rows behind the two it handed over, and
+starting again at the head there is how two answers nothing can use hold everything behind them for
+ever — which is what this arrangement is for.
+
+An answer behind *n* unusable candidates therefore waits ⌈n/2⌉ beats rather than never. That
+position is the gateway process's and is not written down — a replacement starts at the oldest end,
+which costs a walk and loses nothing.
+
 **The answer arrives as an ordinary `rundesk` message.** That is what makes the rest free — a
 message nothing has answered yet is already how a person wakes an agent, and the provider layer
 already starts a turn when the agent is idle, says it into the turn already running when it is busy,
@@ -108,13 +134,23 @@ inferred from their absence.
 Both terminal writes are conditional `UPDATE`s guarded on the row still being open, so a stop and an
 answer racing each other settle once and the loser is told.
 
-A returned result is settled only after the asking agent's turn durably records that it admitted
-the result message. The message claim is written just before the provider accepts it, so a gateway
-can end between those writes. While the claiming turn remains `working`, collection leaves the
-claim alone because that turn may still admit it. Once the claiming turn is terminal without the
-admission record, the next collection pass releases that exact claim and starts the ordinary
-fallback review turn. The result's stable external id reuses the same message rather than delivering
-another copy.
+**A result is settled once it is durably the asking agent's, and not once a turn has read it.** The
+two are the same moment whenever that agent is free. They are not when it is already running a turn
+nothing can speak to — a scheduled run is a process of its own, so the registry a steer needs is not
+the gateway's — and waiting for the review before settling left the delegation `working` for as long
+as that turn ran, which never ended when the turn was itself waiting on this delegation. What is
+still owed is the review, and the third pass is what offers it again: it takes each delegation's
+**newest** recorded result that no turn has claimed — an earlier phase's is what the agent has
+already been told — passes over a conversation with a turn in it, passes over stopped, carried-on
+and forgotten work, and offers each the same message until one turn takes it.
+
+A result a turn has already claimed stays that turn's. The claim is written just before the provider
+accepts it, so a gateway can end between those writes. While the claiming turn remains `working`,
+collection leaves the claim alone because that turn may still admit it. Once the claiming turn is
+terminal without the admission record, the next collection pass releases that exact claim and starts
+the ordinary fallback review turn. The result's stable external id reuses the same message rather
+than delivering another copy, and the claim on that one row is what makes however many offers one
+review.
 
 **There is no attempt counter, and its absence is deliberate.** The turn row is written before the
 work starts and settled in a `finally` that survives the process being taken down, so a provider
@@ -130,6 +166,7 @@ then vanished is not a state this can be in.
 | a steer seems ignored | the turn had already finished; the guidance stays for the next turn on the same delegation |
 | the target answered and the delegator did not notice | the *delegator's* gateway does the collecting, so that one must be running too |
 | the result was claimed just before the delegator's turn ended | the next collecting pass releases the terminal unadmitted claim and starts one fallback review turn |
+| it says `answered` and no review turn has run | the delegator is busy with a turn nothing can speak to; the answer is recorded and readable, and the next free pass reviews it |
 
 `rundesk asked show <id>` is what distinguishes the requested provider and model, the effective ones
 fixed at admission, and what the target's brain actually reported.

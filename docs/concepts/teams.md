@@ -71,6 +71,13 @@ memory, grant, and delegation drift. A failed source change restores the old tre
 member state together. It refuses a newly declared member name already
 held by an agent no team manages, at preview and at confirmation, and names the removal required.
 
+`rundesk teams release <team> --confirm` ends the team lifecycle without touching an agent. It
+removes the `team` marker beside the catalog under the install lock; nothing else is written. The
+catalog stays installed as an ordinary skill catalog whose `team.json` is read by nothing, every
+member keeps its instructions, memory, records, settings, grants and gateway exactly as they were,
+and no update, daily update or turn admission reconciles them again. Without `--confirm` it
+previews and exits non-zero; an unknown team, and a catalog that is not a team, are refused.
+
 `rundesk update` and the daily automatic updater also check every installed team catalog, after the
 application and independently of ordinary catalogs. They require no separate confirmation, validate
 each fetched declaration and every catalog it declares as a dependency before any gateway,

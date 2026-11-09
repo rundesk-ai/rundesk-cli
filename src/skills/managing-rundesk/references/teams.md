@@ -13,6 +13,8 @@ owns those members' managed state and repairs drift from the installed catalog.
 | `teams install <repository> [--provider <provider>] --confirm` | Install the catalog, its dependencies, and every declared member. |
 | `teams update <team> [--provider <provider>]` | Preview the reconciliation. Changes nothing. |
 | `teams update <team> [--provider <provider>] --confirm` | Replace changed catalog content and reconcile every declared member. |
+| `teams release <team>` | Preview releasing the team. Changes nothing. |
+| `teams release <team> --confirm` | Stop managing the team; every member stays exactly as it is and its catalog becomes an ordinary skill catalog. |
 
 Prefix every command with `"$RUNDESK_COMMAND"`. `<repository>` is a GitHub URL or a directory on this
 machine.
