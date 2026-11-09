@@ -127,6 +127,24 @@ A_SUMMARY_AT_MOST = 400
 SANDBOX = "danger-full-access"
 SANDBOX_POLICY = {"type": "dangerFullAccess"}
 
+#: Which of two servers reaches the browser from a Codex that rundesk started, said to the brain on
+#: every new thread. **Measured on 0.167.0 in a rundesk-launched turn**, with the ChatGPT desktop
+#: app's plugins installed: `node_repl` opened, read, clicked, captured and closed a Chrome tab;
+#: `cua_repl` ran its computer controls; and `cua_repl`'s browser surface refused with `The browser
+#: access host is unavailable`. That surface asks the desktop app for permission over a signed pipe
+#: the app hands only to a Codex it starts itself, so no environment rundesk could pass would open
+#: it — and a brain left to choose took the one that refuses. Both servers stay: removing
+#: `cua_repl` would take the computer controls with it.
+#:
+#: Worded as conditions because which servers a thread has is the owner's Codex setup, not rundesk's.
+BROWSER_ROUTE = (
+    "Browser and computer tools: this Codex was started by Rundesk, not by the ChatGPT desktop "
+    "app. If you have a `cua_repl` server, its browser surface cannot connect here and fails with "
+    "\"The browser access host is unavailable\"; do not use it for browser work. Do browser work "
+    "(Chrome tabs, pages, screenshots, clicks, typing) through the Chrome or Browser plugin in the "
+    "`node_repl` server's `js` tool, which works here. `cua_repl`'s computer controls work here; "
+    "use them for work outside the browser.")
+
 #: What a command a brain ran actually did, in rundesk's words. Codex parses the command line itself
 #: and says which of four things it recognised; anything else is a command that ran.
 DID_FOR_COMMAND = {"read": "read", "listFiles": "list", "search": "search", "unknown": "run"}
@@ -594,8 +612,8 @@ class Turn:
         """What only a *new* thread states — see `opening_the_thread` on why a resume takes none."""
         common = dict(self.opening(), threadSource=CLIENT)
         preface = os.environ.get("RUNDESK_PREFACE", "").strip()
-        if preface:
-            common["developerInstructions"] = preface
+        common["developerInstructions"] = "\n\n".join(
+            said for said in (preface, BROWSER_ROUTE) if said)
         return common
 
     def read_the_thread(self, result: dict) -> None:

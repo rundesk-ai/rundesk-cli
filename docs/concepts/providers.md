@@ -114,6 +114,29 @@ opaque handle stale.
 Every run also leaves `raw.jsonl` and `stderr.log` under the agent's own `providers/<run>/`
 directory, which is what makes a turn that behaved strangely inspectable afterwards.
 
+## Browser and computer tools on Codex
+
+A Codex turn uses whatever browser and computer tools the owner's own Codex setup provides; the
+ChatGPT desktop app's plugins add two tool servers. Measured on Codex CLI 0.167.0 in a
+Rundesk-launched turn, with that app's plugins installed:
+
+| Server | From a Rundesk turn |
+|---|---|
+| `node_repl`, through the Chrome or Browser plugin | works: open, read, screenshot, click and close Chrome tabs |
+| `cua_repl` computer controls | work |
+| `cua_repl` browser surface | refuses: `The browser access host is unavailable` |
+
+That browser surface asks the desktop app for permission over a signed pipe the app hands only to a
+Codex it starts itself. No environment Rundesk could pass opens it, and Rundesk does not imitate the
+permission. So the `codex` adapter keeps both servers and tells every new thread to do browser work
+through `node_repl`. A conversation started before that instruction existed keeps its old
+instructions until it starts fresh, because Codex ignores instructions on resume.
+
+The prerequisites sit outside Rundesk: Chrome running, the ChatGPT browser extension connected, and
+the owner's Codex configured with the plugins. Claude reaches Chrome through its own extension
+bridge, which is opt-in: `--chrome` or the owner's *enabled by default* setting. Antigravity reaches
+Chrome through Chrome's remote-debugging port. Grok's CLI has no browser tools.
+
 ## When a turn is not doing what you expected
 
 | What you see | Usually |
@@ -122,4 +145,5 @@ directory, which is what makes a turn that behaved strangely inspectable afterwa
 | `UNKNOWN` or `LOST` climbing | the vendor CLI moved under its adapter; compare against `cli-versions.lock` |
 | the model reported is not the one asked for | the brain chose; `rundesk turns <agent> <turn>` shows both |
 | a resumed conversation starts fresh | the instruction fingerprint changed, so the stored handle went stale |
+| a Codex turn says `The browser access host is unavailable` | it used `cua_repl` for the browser; start the conversation fresh so it gets the `node_repl` instruction |
 | an adapter reports nothing at all | run `rundesk providers check <provider>` — it asks offline and needs no account |
