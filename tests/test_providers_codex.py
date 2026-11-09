@@ -280,8 +280,26 @@ for line in sys.stdin:
         reports it, and the turn merely behaves strangely."""
         self.spoken = self.spoke(RUNDESK_PREFACE="stand up straight")
         params = self.sent("thread/start")[0]["params"]
-        self.assertEqual("stand up straight", params["developerInstructions"])
+        self.assertTrue(params["developerInstructions"].startswith("stand up straight"))
         self.assertNotIn("baseInstructions", params)
+
+    def test_a_new_thread_is_told_which_server_reaches_the_browser_from_here(self):
+        """**Measured on 0.167.0 in a Rundesk-launched turn**: `node_repl` opened, read, clicked and
+        closed a Chrome tab; `cua_repl` ran its computer controls; and `cua_repl`'s browser surface
+        refused with `The browser access host is unavailable`, because only a Codex the ChatGPT
+        desktop app starts is handed that host. A brain left to choose took the one that refuses —
+        so both servers stay, and the brain is told which one does what."""
+        self.spoken = self.spoke()
+        said = self.sent("thread/start")[0]["params"]["developerInstructions"]
+        self.assertIn("node_repl", said)
+        self.assertIn("cua_repl", said)
+        self.assertIn("The browser access host is unavailable", said)
+
+    def test_the_owners_preface_comes_first_and_is_kept_whole_beside_the_browser_route(self):
+        self.spoken = self.spoke(RUNDESK_PREFACE="stand up straight")
+        said = self.sent("thread/start")[0]["params"]["developerInstructions"]
+        self.assertTrue(said.startswith("stand up straight\n\n"), said)
+        self.assertIn("node_repl", said)
 
     def test_a_resumed_conversation_carries_no_preface_because_the_brain_would_ignore_one(self):
         """Measured against 0.146.0 three ways: bound at `thread/start`, obeyed after a resume that
@@ -610,7 +628,8 @@ for line in sys.stdin:
         # it off would answer in a thread that had never been told how to behave.
         self.ran(RUNDESK_PREFACE="stand up straight")
         params = self.sent("thread/start")[0]["params"]
-        self.assertEqual("stand up straight", params["developerInstructions"])
+        self.assertTrue(params["developerInstructions"].startswith("stand up straight"))
+        self.assertIn("node_repl", params["developerInstructions"])
         self.assertEqual("rundesk", params["threadSource"])
 
     def test_the_lost_continuity_is_said_to_the_log_and_never_to_the_person(self):
