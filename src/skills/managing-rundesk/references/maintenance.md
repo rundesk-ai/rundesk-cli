@@ -9,6 +9,23 @@ context and removes its own scratch; it does not inventory the whole home.
    directories without following symlinks. Reuse the generated `plans/`, `research/`, `scripts/`,
    `retros/`, and `tasks/` areas for agent-owned work; keep each README and follow its boundary.
    For a symlink, inspect only link metadata and its target spelling; never open the link or target.
+   The one exception is a held skill's `SKILL.md` and the references it requires. Before opening or
+   natively loading each such file, check path metadata only, never contents:
+   - `"$RUNDESK_COMMAND" skills list "$RUNDESK_AGENT"` lists `<name>` with a FROM catalog, not `—`;
+   - for FROM `<catalog>`, the `realpath` of the exact path you will open lies inside
+     `<library>/<catalog>/`, where `<library>` is the `realpath` of the directory on the first line
+     of `"$RUNDESK_COMMAND" skills`;
+   - for FROM `<catalog> (--as)`, `skills/<name>` is a real directory, not a symlink, and the file's
+     `realpath` lies inside that directory's `realpath`.
+
+   ```sh
+   library=$(realpath "$("$RUNDESK_COMMAND" skills | sed -n '1s/^skills in //p')") &&
+     file=$(realpath "skills/managing-rundesk/references/retrospective.md") &&
+     case "$file" in "$library/rundesk/"*) echo inside ;; *) echo forbidden ;; esac
+   ```
+
+   A file that fails, is missing, or does not resolve stays a forbidden link target. Never change,
+   replace, or remove a link or its target.
    Preserve and list `retros/`, but do not open its entries; the next phase owns that evidence.
 2. Keep compact owner preferences, durable role and responsibilities, reusable cross-project
    process and gotchas, and small active-project pointers: stable location, purpose, role, and

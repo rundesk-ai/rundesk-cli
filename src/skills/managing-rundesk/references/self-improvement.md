@@ -8,7 +8,8 @@ rules, memory, or capability changes.
 
 1. Read `MEMORY.md` and only indexes it links. Establish the agent's durable role, responsibilities,
    active scope, and owner preferences. Maintenance preservation remains in force: never open a
-   symlink or its target in this or any later phase; inspect link metadata and target spelling only.
+   symlink or its target in this or any later phase except through the maintenance reference's
+   held-skill exception; otherwise inspect link metadata and target spelling only.
 2. Start with previous `weekly-self-improve-upkeep` scheduled runs when they exist: inspect the schedule and its
    bounded messages with public Rundesk commands, then compare what went well, what did not, and what a
    prior action already resolved. Continue across the full bounded evidence window at listing level,
