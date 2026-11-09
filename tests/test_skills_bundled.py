@@ -152,11 +152,10 @@ class WhatIsShipped(Bundled):
 
     def test_it_holds_only_first_party_operating_skills(self):
         # This is the product-owned operating floor: guidance Rundesk maintains with its own
-        # lifecycle rather than borrowing from a general-purpose catalog. Some packages are tightly
-        # version-coupled; managing-github is here so guarded external delivery remains a first-party
-        # capability with one canonical owner.
+        # lifecycle rather than borrowing from a general-purpose catalog. managing-github left in
+        # 0.62: its one maintained copy is in the `skills` catalog every install depends on.
         self.assertEqual(
-            ["delegating-work", "managing-github", "managing-rundesk", "writing-skills"],
+            ["delegating-work", "managing-rundesk", "writing-skills"],
             self.named(),
         )
 
@@ -539,65 +538,6 @@ class WhatAShippedSkillMayClaim(Bundled):
                 "Send this to the configured security reviewer."):
             with self.subTest(bad_brief=bad_brief):
                 self.assertRegex(bad_brief, generic_role)
-
-    def test_github_delivery_cleans_only_disposable_merged_heads(self):
-        reference = (self.skills / "managing-github" / "references" /
-                     "pull-requests.md").read_text(encoding="utf-8")
-        for phrase in (
-                "## Clean up after merge",
-                "require `state: MERGED`",
-                "recorded `headRefOid`",
-                "a production or deployment branch",
-                "shared development or integration branch",
-                "never\nforce-remove an unclean or locked worktree",
-                "git push <push-remote> --delete <head>",
-                "verify the local listing and remote query return no matching ref"):
-            with self.subTest(cleanup_contract=phrase):
-                self.assertIn(phrase, reference)
-
-    def test_github_delivery_reconciles_issue_disposition_before_merge(self):
-        references = self.skills / "managing-github" / "references"
-        pull_requests = (references / "pull-requests.md").read_text(encoding="utf-8")
-        issues = (references / "issues.md").read_text(encoding="utf-8")
-
-        for phrase in (
-                "Reconcile every issue named by the assignment or pull request",
-                "A bare issue URL, `#123`, `Refs`, or",
-                "explicitly report\n  that the issue will remain open",
-                "inspect `closingIssuesReferences`",
-                "require `state: CLOSED`"):
-            with self.subTest(pull_request_contract=phrase):
-                self.assertIn(phrase, pull_requests)
-        for phrase in (
-                "Completed work targeting the default branch must use a full closing",
-                "Partial work must name the unmet acceptance criteria and leave the issue open",
-                "read the issue back instead of assuming the reference changed its state"):
-            with self.subTest(issue_contract=phrase):
-                self.assertIn(phrase, issues)
-
-    def test_github_delivery_takes_the_short_path_from_green_head_to_release(self):
-        references = self.skills / "managing-github" / "references"
-        pull_requests = (references / "pull-requests.md").read_text(encoding="utf-8")
-        releases = (references / "releases.md").read_text(encoding="utf-8")
-
-        for phrase in (
-                "## Merge an already-ready pull request",
-                "same recorded `headRefOid`",
-                "do not rerun local validation",
-                "Do not delegate",
-                "`--match-head-commit`",
-                "report the exact failed gate and stop"):
-            with self.subTest(pull_request_fast_path=phrase):
-                self.assertIn(phrase, pull_requests)
-        for phrase in (
-                "## Continue directly from a verified merge",
-                "exact merge commit's required default-branch workflow",
-                "Do not reopen implementation",
-                "previous exact-head validation",
-                "one bounded wait",
-                "report the release blocker and stop"):
-            with self.subTest(release_fast_path=phrase):
-                self.assertIn(phrase, releases)
 
     def test_agent_instruction_guidance_is_routed_and_has_each_required_section(self):
         skill = self.skills / "managing-rundesk"

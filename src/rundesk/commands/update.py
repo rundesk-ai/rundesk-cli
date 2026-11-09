@@ -470,7 +470,7 @@ def _surface(said: str, reporting: Optional[Reporting], *, failed: bool = False)
         reporting(said, failed)
 
 
-def settle(gateways: Optional[Gateways] = None) -> int:
+def settle(gateways: Optional[Gateways] = None, refreshing: Optional[Refreshing] = None) -> int:
     """Make this install match the release now sitting in `app/`, agents and all.
 
     Self-determining rather than told which case it is: an install with no configuration file has
@@ -538,6 +538,13 @@ def settle(gateways: Optional[Gateways] = None) -> int:
         # is what reaches an agent made by a release that shipped no pages at all, and a home
         # somebody deleted a file out of.
         pages.everybody_has_theirs(directory.known(), directory.home, _out_loud)
+        # **Here, because the catalog sweep after an update is the replaced release's code.** Only
+        # this release knows which catalog it depends on and which skills it stopped shipping, so it
+        # places those itself; a fresh install gets them from the sweep `install` runs next. A
+        # catalog that cannot be reached is said and never fails the settle.
+        if not fresh:
+            for line in skills.required_settled(refreshing):
+                print(f"        {line}")
         from rundesk.commands import automatic_updates
         scheduled = automatic_updates.reconcile()
         if scheduled.how == job.CANNOT_TELL:

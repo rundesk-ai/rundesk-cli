@@ -1,13 +1,15 @@
 """Where skills stand, what makes a directory a catalog and a skill, and what is written beside one.
 
     data/skills/
-      rundesk-skills/           a catalog, named as it calls itself
+      skills/                   a catalog, named as it calls itself
         catalog.json            where it came from and what was last fetched
         app/                    the catalog's own tree, verbatim
           manifest.json         what makes the directory a catalog
           skills/
             writing-plans/
               SKILL.md          what makes the directory a skill
+            games/              a group folder, when the manifest lists where each skill stands
+              game-design/SKILL.md
       local/                    the owner's own, never fetched and never removed by rundesk
         manifest.json           written by the install
         my-thing/SKILL.md       flat: no app/, because nothing ever swaps this one
@@ -38,14 +40,20 @@ for the same reason. A directory half-built exists; a directory holding the file
 been finished. `catalog.json` is deliberately *not* the test: it records where a catalog was fetched
 from, and `local` was never fetched from anywhere.
 
-## Skills are found, not listed
+## Skills are found, unless the manifest says where they stand
 
-`manifest.json` says what the catalog is and never which skills it holds — those are read off
-`app/skills/*/SKILL.md`, the way migration steps, test suites and agents are already found in this
-tree. The build this replaces listed each skill in the manifest with its path, which meant three
-places had to agree about one name: the manifest entry, the directory, and the `SKILL.md` frontmatter.
-They disagreed, and every disagreement was a catalog that installed and then behaved as though a skill
-were not there. There is now one place, and it is the directory.
+A manifest with no `skills` list says what the catalog is and never which skills it holds — those
+are read off `app/skills/*/SKILL.md`, the way migration steps, test suites and agents are already
+found in this tree.
+
+A catalog that keeps its skills in group folders — `skills/<group>/<name>/` — cannot be walked one
+level deep, so its manifest lists each skill as `{"name", "path"}`. Three places then have to agree
+about one name: the entry, the folder, and the `SKILL.md` frontmatter. The build this replaces let
+them disagree, and every disagreement was a catalog that installed and then behaved as though a
+skill were not there. So `indexed` refuses every disagreement, a path outside `skills/`, a missing
+`SKILL.md`, a name listed twice and a malformed entry, each named, before anything is installed.
+Either way the answer is one **index** — name to directory — and every walker asks it rather than
+spelling `app/skills/<name>` itself.
 
 A catalog whose walk finds no skill is refused. Anything that finds its own work fails when it finds
 none: a catalog with nothing in it is a repository somebody pointed at the wrong branch, and installing
@@ -74,7 +82,10 @@ BUNDLED = "rundesk"
 #: Kept apart from `BUNDLED` because nothing in it is coupled to a version — how to write a pull
 #: request does not change when rundesk does — so it belongs on its own release schedule, where it can
 #: be corrected without cutting a rundesk release.
-DEPENDED = "rundesk-skills"
+#:
+#: Releases up to 0.61 depended on `rundesk-skills` instead. An install carried from one keeps that
+#: catalog as an ordinary one an owner may remove, and nothing held from it is revoked.
+DEPENDED = "skills"
 
 #: The catalog an owner's own skills stand in. Nothing fetches into it and nothing removes it.
 MINE = "local"
@@ -115,6 +126,13 @@ PROVENANCE = "catalog.json"
 
 #: Where a catalog keeps its skills, inside its tree.
 INSIDE = "skills"
+
+#: The optional manifest field saying where each skill stands, for a catalog that keeps them in
+#: group folders. Each entry is exactly `{"name": ..., "path": "skills/..."}`.
+LISTED = "skills"
+
+#: The fields one listed entry carries, and no others.
+ENTRY = ("name", "path")
 
 #: The team declaration a repository may carry. It remains inside the fetched tree so a catalog
 #: update replaces the declaration and its canonical instructions together.
@@ -172,8 +190,8 @@ class Manifest(NamedTuple):
 
     Deliberately small. Every field a catalog format carries is a field an author can get wrong, a
     field this release has to keep understanding for ever, and a field somebody has to document. The
-    one thing genuinely worth declaring — which skills are here — is not declared at all, because the
-    directory already says it and two answers to one question is the bug this format exists without.
+    optional `skills` list is not here: it is read by `indexed`, which is the one place that decides
+    where a catalog's skills stand.
     """
 
     schema: int
@@ -213,6 +231,18 @@ class Catalog(NamedTuple):
     at: Path
     manifest: Manifest
     provenance: Optional[Provenance]
+
+
+class Index(NamedTuple):
+    """Where each skill in one catalog tree stands, and why any listed entry cannot be used.
+
+    `skills` maps a skill's name to its directory. `trouble` is empty for a tree that can be
+    installed; an installed catalog's listings read `skills` and leave `trouble` to install time and
+    `doctor`, the way an invalid `SKILL.md` is already left out of a listing rather than raised.
+    """
+
+    skills: Dict[str, Path]
+    trouble: List[str]
 
 
 class Skill(NamedTuple):
@@ -513,6 +543,88 @@ def found(at: Path) -> List[str]:
                   if one.is_dir() and not files.staged(one.name) and (one / DECLARED).is_file())
 
 
+def indexed(tree: Path) -> Index:
+    """Where each skill in the catalog tree at `tree` stands, read and checked.
+
+    **No `skills` list in the manifest behaves exactly as before**: every directory under
+    `skills/` holding a `SKILL.md`. With one, each skill stands at its listed `path`, and every
+    entry that cannot be used is named in `trouble` rather than only the first — a refusal naming
+    one is a refusal somebody fixes and then meets again.
+
+    The listed path is kept under `skills/` after resolving, so a link or a `..` cannot put a skill
+    the catalog does not own into an agent's home.
+    """
+    how, said = files.read_json(tree / MANIFEST)
+    if how != files.READ or not isinstance(said, dict) or LISTED not in said:
+        walked = tree / INSIDE
+        return Index({one: walked / one for one in found(walked)}, [])
+    listed = said[LISTED]
+    if not isinstance(listed, list):
+        return Index({}, [f"{MANIFEST} has a {LISTED} field that is not a list of entries"])
+
+    skills: Dict[str, Path] = {}
+    trouble: List[str] = []
+    seen: List[str] = []
+    for entry in listed:
+        why, name, at = _listed_entry(tree, entry)
+        if name:
+            if name in seen:
+                trouble.append(f"{MANIFEST} lists {name} more than once")
+                continue
+            seen.append(name)
+        if why:
+            trouble.append(why)
+            continue
+        skills[name] = at
+    return Index(dict(sorted(skills.items())), trouble)
+
+
+def index_of(name: str) -> Dict[str, Path]:
+    """Where each skill in the installed catalog called `name` stands, by skill name.
+
+    `local` is flat and never listed. Every other catalog is answered by `indexed` on its tree, and
+    an entry that cannot be used is left out: this answers listings, grants and lookups, and an
+    entry nobody can use is not a skill any of them should be handed.
+    """
+    if name == MINE:
+        at = stands(name)
+        return {one: at / one for one in found(at)}
+    return indexed(tree(name)).skills
+
+
+def _listed_entry(tree: Path, entry: object) -> Tuple[str, str, Path]:
+    """Why one listed entry cannot be used, the name it carries, and where its skill stands.
+
+    The name is answered even when the entry is refused, so a name listed twice is caught whether
+    or not either listing is otherwise sound.
+    """
+    manifest = MANIFEST
+    if (not isinstance(entry, dict) or set(entry) != set(ENTRY)
+            or not all(isinstance(entry[field], str) for field in ENTRY)):
+        return (f"{manifest} lists a malformed skill entry {entry!r} — each is an object with "
+                f"exactly a name and a path", "", tree)
+    name, path = entry["name"], entry["path"]
+    trouble = skill_trouble(name)
+    if trouble:
+        return f"{manifest} lists {name!r}, and {trouble}", name, tree
+    parts = path.split("/")
+    if (path.startswith("/") or len(parts) < 2 or parts[0] != INSIDE
+            or any(part in ("", ".", "..") for part in parts)):
+        return (f"{manifest} puts {name} at {path!r}, which is not a folder under {INSIDE}/ in "
+                "this catalog", name, tree)
+    at = tree.joinpath(*parts)
+    try:
+        at.resolve().relative_to((tree / INSIDE).resolve())
+    except ValueError:
+        return f"{manifest} puts {name} at {path!r}, which reaches outside this catalog", name, tree
+    if parts[-1] != name:
+        return (f"{manifest} lists {name} at {path!r}, whose folder is called {parts[-1]} — a "
+                "brain indexes a skill by its folder, so the two must agree", name, tree)
+    if not (at / DECLARED).is_file():
+        return f"{manifest} lists {name} at {path!r}, and there is no {DECLARED} there", name, tree
+    return "", name, at
+
+
 def known() -> List[str]:
     """Every catalog this install has, in name order.
 
@@ -561,11 +673,10 @@ def held(name: str) -> List[Skill]:
     be read is left out of `catalogs`: this is a listing. What is wrong with it is `trouble_with`'s
     answer, said at install time and again by `doctor`.
     """
-    at = inside(name)
     settled = []
-    for one in found(at):
+    for at in index_of(name).values():
         try:
-            settled.append(read_skill(name, at / one))
+            settled.append(read_skill(name, at))
         except Refused:
             continue
     return settled
@@ -590,11 +701,13 @@ def look_up(address: str) -> Skill:
         raise Refused(f"{address!r} is not {ADDRESS}{_also_in(address)}")
     if not catalog or not name or "/" in name:
         raise Refused(f"{address!r} is not {ADDRESS}")
-    at = inside(catalog) / name
+    # The catalog half is refused first, as it always was: `stands` names a bad catalog name.
+    stands(catalog)
     trouble = skill_trouble(name)
     if trouble:
         raise Refused(trouble)
-    if not (at / DECLARED).is_file():
+    at = index_of(catalog).get(name)
+    if at is None or not (at / DECLARED).is_file():
         if catalog not in known():
             raise Refused(f"there is no catalog called {catalog} — rundesk skills catalogs says "
                           "what there is")

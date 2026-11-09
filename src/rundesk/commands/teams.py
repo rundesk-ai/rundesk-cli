@@ -1,4 +1,4 @@
-"""Install, update, list, and reconcile version-controlled teams."""
+"""Install, update, list, reconcile, and release version-controlled teams."""
 
 import argparse
 import contextlib
@@ -63,6 +63,11 @@ def register(sub: Subcommands) -> None:
     moved.add_argument("--confirm", action="store_true",
                        help="required — without it, nothing is changed")
 
+    let_go = what.add_parser("release", help="stop managing a team, keeping its agents as they are")
+    let_go.add_argument("team", metavar="<team>", help="which installed team to release")
+    let_go.add_argument("--confirm", action="store_true",
+                        help="required — without it, nothing is changed")
+
 
 def cmd_teams(args: argparse.Namespace,
               fetching: Optional[skill_catalogs.Fetching] = None) -> int:
@@ -74,6 +79,8 @@ def cmd_teams(args: argparse.Namespace,
     if what == "update":
         return _updated(args.team, args.provider, getattr(args, "source", None), args.confirm,
                         fetching)
+    if what == "release":
+        return _released(args.team, args.confirm)
     raise AssertionError(f"teams {what} is registered on the parser and answered by nothing")
 
 
@@ -146,8 +153,8 @@ def _refreshed(name: str, fetching: Optional[skill_catalogs.Fetching],
                                     moved = skill_catalogs.updated(
                                         name, coming, saying, validating=catalogs.read)
                                     grants.retired(name, moved.retired)
-                                    changed = reconcile.apply(catalogs.installed(name),
-                                                              previous=previous)
+                                    changed = grants.relocated(name) + reconcile.apply(
+                                        catalogs.installed(name), previous=previous)
                         except TROUBLE as why:
                             failure = why
             finally:
@@ -267,7 +274,8 @@ def _installed(source: str, provider: Optional[str], confirm: bool,
                             moved = skill_catalogs.installed(coming, as_team=True)
                         grants.retired(team.name, moved.retired)
                         installed = catalogs.installed(team.name)
-                        changed = reconcile.apply(installed, provider, installing=True)
+                        changed = grants.relocated(team.name) + reconcile.apply(
+                            installed, provider, installing=True)
     except restoring.Refused as why:
         # The one outcome that is neither installed nor undone: recover from what actually remains.
         # `teams update` exists only when the failed restore left a team catalog standing.
@@ -338,12 +346,48 @@ def _updated(name: str, provider: Optional[str], source: Optional[str], confirm:
                         moved = skill_catalogs.updated(name, coming, validating=catalogs.read)
                         grants.retired(name, moved.retired)
                         installed = catalogs.installed(name)
-                        changed = reconcile.apply(installed, provider, previous=previous)
+                        changed = grants.relocated(name) + reconcile.apply(
+                            installed, provider, previous=previous)
     except TROUBLE as why:
         return _failed(str(why), f"{name} was not fully reconciled",
                        f"retry with: {_update_command(name, provider, source)}")
     source_change = (f"{previous_source} -> {selected_source}" if source_changed else None)
     return _completed(installed, changed, "updated", source_change)
+
+
+def _released(name: str, confirm: bool) -> int:
+    """Stop managing a team, or say what releasing it would leave as it is."""
+    try:
+        if name not in library.known():
+            return _failed(f"there is no team called {name} — rundesk teams list says what there is")
+        if not library.is_team(name):
+            return _failed(f"{name} is a skill catalog, not a team")
+        team = catalogs.installed(name)
+        if not confirm:
+            return _would_release(team)
+        skill_catalogs.released(name)
+    except TROUBLE as why:
+        return _failed(str(why), f"{name} is unchanged")
+    print(f"team {name} released")
+    print(f"        agents   {', '.join(one.name for one in team.members)} — kept exactly as they "
+          "are, and no longer managed")
+    print(f"        catalog  {name} is now an ordinary skill catalog: rundesk skills update and "
+          "rundesk skills remove may move it")
+    return OK
+
+
+def _would_release(team: catalogs.Team) -> int:
+    print(f"release: this would stop managing team {team.name}", file=sys.stderr)
+    for member in team.members:
+        print(f"        keep     {member.name} — instructions, memory, records, settings, grants "
+              "and gateway exactly as they are", file=sys.stderr)
+    print(f"        catalog  {team.name} stays installed as an ordinary skill catalog; its "
+          f"{library.TEAM} is no longer read", file=sys.stderr)
+    print("        stop     rundesk update and the daily updater reconciling these agents",
+          file=sys.stderr)
+    print("        nothing was changed. To go ahead:", file=sys.stderr)
+    print(f"        rundesk teams release {team.name} --confirm", file=sys.stderr)
+    return FAILED
 
 
 def _completed(team: catalogs.Team, changed, verb: str,
@@ -444,7 +488,7 @@ def _prepared_dependencies(team: catalogs.Team,
                     raise catalogs.Refused(
                         f"dependency {dependency.name} is installed from "
                         f"{settled.provenance.source}, not {dependency.source}")
-                available = set(library.found(library.inside(dependency.name)))
+                available = set(library.index_of(dependency.name))
                 missing = [skill for skill in required[dependency.name] if skill not in available]
                 if missing:
                     raise catalogs.Refused(

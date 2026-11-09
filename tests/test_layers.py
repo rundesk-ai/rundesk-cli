@@ -185,6 +185,7 @@ ISSUE_TEMPLATE_DIGESTS = {
 }
 
 SUPPORTED_CATALOG_URLS = [
+    "https://github.com/rundesk-ai/skills",
     "https://github.com/rundesk-ai/rundesk-skills",
     "https://github.com/rundesk-ai/rundesk-skills-apple",
     "https://github.com/rundesk-ai/rundesk-skills-integrations",

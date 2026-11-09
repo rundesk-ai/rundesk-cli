@@ -196,7 +196,7 @@ def _member(at: Path, declared: Path, raw, team_name: str, schema: int,
     bare = [skill for _catalog, skill in addresses]
     if len(bare) != len(set(bare)):
         raise Refused(f"{declared} gives {name} two skills with the same installed name")
-    available = set(library.found(at / library.INSIDE))
+    available = set(library.indexed(at).skills)
     missing = [skill for catalog, skill in addresses if catalog == team_name and skill not in available]
     if missing:
         raise Refused(f"{declared} gives {name} skills this catalog does not hold: "

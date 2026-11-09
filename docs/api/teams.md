@@ -11,6 +11,7 @@ once installed, and everything reconciliation puts back, is
 | `teams [list]` | every installed team and its members |
 | `teams install <repository> [--provider <provider>] [--confirm]` | install a team catalog and its stopped agents |
 | `teams update <team> [--source <repository>] [--provider <provider>] [--confirm]` | update and reconcile an installed team |
+| `teams release <team> [--confirm]` | stop managing a team, keeping its agents exactly as they are |
 
 `<repository>` is a GitHub URL or a directory on this machine. `--provider` supplies the provider
 for agents the command *creates* — new members on install, newly declared members on update — and
@@ -23,9 +24,9 @@ Without `--confirm` the command says what it would do, does none of it, and exit
 ```console
 $ rundesk teams install ./development-team --provider codex
 install: this would install team development-team from ./development-team
-        catalog  rundesk-skills — reuse installed from https://github.com/rundesk-ai/rundesk-skills; require writing-plans
+        catalog  skills — reuse installed from https://github.com/rundesk-ai/skills; require writing-implementation-plans
         member   forge — create with provider codex
-                 replace AGENTS.md and CLAUDE.md; remove MEMORY.md; team-managed skills development-team/implementing, rundesk-skills/writing-plans plus Rundesk-required skills; every other grant preserved; weekly upkeep on; leave gateway stopped
+                 replace AGENTS.md and CLAUDE.md; remove MEMORY.md; team-managed skills development-team/implementing, skills/writing-implementation-plans plus Rundesk-required skills; every other grant preserved; weekly upkeep on; leave gateway stopped
         nothing was installed or changed. To go ahead:
         rundesk teams install ./development-team --provider codex --confirm
 ```
@@ -48,6 +49,8 @@ member says what its instructions, memory, skills and upkeep will become.
 | a user-managed grant occupies a name the declaration needs | `update`, refresh, or that member's turn admission | revoke it, or keep it under the alias command the refusal names |
 | a member's records cannot be read | `update` | refused before anything moves |
 | something that is neither a file nor a symlink stands where a managed page belongs | `update` | refused before anything moves |
+| there is no team of that name | `release` | `rundesk teams list` says what there is |
+| the catalog is installed but is not a team | `release` | nothing to release; it already moves through `skills` |
 
 The clean-start rule behind the first two is that every member begins from its catalog-owned
 instructions, memory policy, delegation scope, team-managed grants and upkeep setting. A part-way
@@ -64,6 +67,28 @@ guarded update. It never reuses the old source's ETag, it validates that the new
 installed team's exact name, and it is named in both the preview and the completed result. The new
 source is recorded even when its tree is byte-identical to the old one. A reconciliation that fails
 part-way restores the old catalog tree, the recorded source and member state together.
+
+### Releasing a team
+
+`rundesk teams release <team>` stops managing a team and changes nothing else. Without `--confirm`
+it previews and exits non-zero:
+
+```console
+$ rundesk teams release development-team
+release: this would stop managing team development-team
+        keep     forge — instructions, memory, records, settings, grants and gateway exactly as they are
+        catalog  development-team stays installed as an ordinary skill catalog; its team.json is no longer read
+        stop     rundesk update and the daily updater reconciling these agents
+        nothing was changed. To go ahead:
+        rundesk teams release development-team --confirm
+```
+
+`--confirm` removes the team marker beside the catalog under the install lock. Every member keeps
+its instructions, memory, records, settings, grants and gateway byte for byte; `rundesk update`,
+the daily updater and turn admission stop reconciling them; and the catalog becomes an ordinary one
+that `skills update` moves and `skills remove` takes away — a removal that, like any other, revokes
+grants of its skills. A shared catalog it declared is no longer protected on its account. Installing
+the team again goes through `teams install`, which requires every member name to be absent.
 
 ### Members start stopped
 

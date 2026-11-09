@@ -17,7 +17,7 @@ command.
 | [schedules.md](./schedules.md) | `schedules` — list, add, update, show, run, remove |
 | [channels.md](./channels.md) | `channels` — list, add, show, configure, test, remove, doctor |
 | [skills.md](./skills.md) | `skills` — catalogs, grants, profiles, and what a held skill needs |
-| [teams.md](./teams.md) | `teams` — list, install, update |
+| [teams.md](./teams.md) | `teams` — list, install, update, release |
 
 ## Every verb, in one place
 
@@ -99,6 +99,7 @@ rundesk skills doctor [<agent>]           # what cannot be used, and exactly why
 rundesk teams list                        # every installed team and its members
 rundesk teams install <repository> [--provider <provider>] [--confirm]
 rundesk teams update <team> [--source <repository>] [--provider <provider>] [--confirm]
+rundesk teams release <team> [--confirm]  # stop managing a team, keeping its agents as they are
 rundesk install [--source <dir>] [--bin-dir <dir>]   # what install.sh runs
 rundesk update [--continue]               # move to the newest release, or say it is up to date
 rundesk uninstall --confirm [--purge --root <dir>]  # purge needs the matching explicit root
