@@ -19,9 +19,20 @@ checkout. A `docs/concepts/` page is the source of truth for its subsystem;
 
 1. Read `docs/BRIEF.md` and `docs/CODEMAP.md`, then `docs/api/`, `docs/concepts/layout.md`, and
    `docs/guides/development.md`; then the pages for what you are changing, and every file you edit.
-2. Load the smallest complete set of applicable runtime skills. Use `writing-skills` for bundled
-   skills, `naming-grammar-conventions` before choosing or changing recurring or cross-layer terms,
-   and `managing-github` for pull requests or releases.
+2. Load every skill the work calls for — all of them, in one pass, before editing; after a
+   compaction, load them again.
+
+   | The work | Load |
+   |---|---|
+   | Any Python — the product, its adapters, the runners and the tests | `using-python` |
+   | A test suite, or any change in behavior | `testing-code` |
+   | State stored in SQLite — agent records and their migration steps, provider turns, backups | `using-sqlite` |
+   | A bundled skill | `writing-skills` |
+   | A failure whose cause is not yet proved | `debugging-code` |
+
+   The table is the floor, not the list — the descriptions cover what it omits. Also load
+   `naming-software-terms` before choosing or changing recurring or cross-layer terms, and
+   `managing-github` for pull requests or releases.
 3. Inspect `git status`, the relevant diff, and the current tests before editing. Preserve other
    people's changes and treat unfamiliar files as owned data, not cleanup candidates.
 4. Search before adding logic, terminology, tests, or documentation. Reuse, extend, or refactor the
@@ -152,8 +163,7 @@ Keep documentation true in the same change as behavior.
 
 - Keep `docs/` in its layout. Only `README.md`, `BRIEF.md`, and `CODEMAP.md` sit at its root;
   every other page is in `api/`, `concepts/`, `guides/`, `extending/`, `requirements/`, or
-  `research/`. Use the `structuring-project-docs` skill before adding a home, moving a page, or
-  writing a requirement. Never create a second source of truth, and never create an empty home.
+  `research/`. Never create a second source of truth, and never create an empty home.
 - Keep pages thin. Lead with the fact, use a table wherever the content is tabular, and split a page
   that has grown past a screen per section rather than trimming it evenly.
 - Add a page's row to its home's `README.md` in the same change that adds the page. An index behind
