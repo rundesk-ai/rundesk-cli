@@ -12,7 +12,9 @@ install/update behavior, and the Python 3.9 floor are contracts.
 Read [`docs/BRIEF.md`](docs/BRIEF.md) and [`docs/CODEMAP.md`](docs/CODEMAP.md) first. Then
 [`docs/api/`](docs/api/) for the operation contract, [`docs/concepts/layout.md`](docs/concepts/layout.md)
 for installed state, and [`docs/guides/development.md`](docs/guides/development.md) before running a
-checkout. A `docs/concepts/` page is the source of truth for its subsystem;
+checkout. [`docs/wiki/`](docs/wiki/) is the source of truth for what Rundesk does and is read instead of
+the code; `api/`, `concepts/`, `guides/` and `extending/` are legacy, migrating into it page by page and
+authoritative only until the wiki covers what they describe.
 [`docs/extending/catalogs.md`](docs/extending/catalogs.md) is the contract for a published catalog.
 
 ## Before you work
@@ -51,6 +53,7 @@ tests/test_*.py                 directly runnable isolated suites
 tests/support.py                scrubbed environment, closed network, and scratch-root harness
 scripts/suites                  discovers every suite and fails on empty discovery
 docs/                           README, BRIEF and CODEMAP; every other page is in a home
+  wiki/                         the source of truth: cited pages, checked by scripts/dev-wiki.sh
   api/                          every operation, one page per group, and what each guarantees
   concepts/                     how a subsystem works, and how it fails
   guides/                       one task each, start to finish
@@ -151,9 +154,12 @@ mechanical proof together rather than bypassing it.
 Keep documentation true in the same change as behavior.
 
 - Keep `docs/` in its layout. Only `README.md`, `BRIEF.md`, and `CODEMAP.md` sit at its root;
-  every other page is in `api/`, `concepts/`, `guides/`, `extending/`, `requirements/`, or
+  every other page is in `wiki/`, `api/`, `concepts/`, `guides/`, `extending/`, `requirements/`, or
   `research/`. Use the `structuring-project-docs` skill before adding a home, moving a page, or
   writing a requirement. Never create a second source of truth, and never create an empty home.
+- `docs/wiki/` is where new documentation of behavior goes. `api/`, `concepts/`, `guides/` and
+  `extending/` are being retired into it: correct one when its subject changes, and do not add a page
+  to it that `docs/wiki/` should hold instead.
 - Keep pages thin. Lead with the fact, use a table wherever the content is tabular, and split a page
   that has grown past a screen per section rather than trimming it evenly.
 - Add a page's row to its home's `README.md` in the same change that adds the page. An index behind
@@ -173,6 +179,19 @@ Keep documentation true in the same change as behavior.
   a skill promise an unavailable verb or stale workflow.
 - Keep `AGENTS.md` and `CLAUDE.md` byte-identical. Edit one complete source and copy it to the other;
   never maintain divergent instructions.
+
+### The wiki
+
+`docs/wiki/` is read instead of the code, so it changes in the same change as the code, never after.
+
+- Before writing or changing any page under `docs/wiki/`, load the `writing-wiki-pages` skill, if it
+  is installed, and follow it.
+- A change in behavior updates the page that describes it, in the same commit. Behavior a person
+  meets that no page describes gets its page, or a section of one.
+- A stated requirement goes onto its page when it is stated, marked `{missing}` until code
+  implements it. The change that builds it replaces the mark with a citation to that code.
+- An intent needs approval; a new page is a draft until its intent is approved.
+- Finish only when `./scripts/dev-wiki.sh check` reports 0 problems.
 
 ## Build, test, and run
 

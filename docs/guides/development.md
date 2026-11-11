@@ -227,6 +227,28 @@ Two things it cannot check, and they matter more than anything it can:
   code, and most of these modules exist because a previous version of them got something wrong. Say
   which thing.
 
+## The wiki
+
+[`docs/wiki/`](../wiki/) is the source of truth for what Rundesk does, and it is checked the way the
+code is. Every sentence there names the file and function it came from, or carries `{missing}`;
+`wiki check` fails on a sentence that cites nothing, a heading that asks a question, a British
+spelling, a page over its word budget and a link to a page that does not exist.
+
+`scripts/dev-wiki.sh` runs the checker at one pinned wiki-builder release, through `uvx`, so nothing
+is installed into this checkout. Like `ruff`, it is a development gate and **not** a dependency of
+the product: it needs Python 3.11, and `src/rundesk` stays on the 3.9 floor because the checker never
+runs inside it.
+
+```sh
+./scripts/dev-wiki.sh check     # what the gate runs
+./scripts/dev-wiki.sh serve     # build it and read it on this machine
+./scripts/dev-wiki.sh coverage  # source files no page cites
+```
+
+Before writing or changing a page, load the `writing-wiki-pages` skill that
+`./scripts/dev-wiki.sh sync` wrote into `.agents/skills/`. Changing a page's intent needs the owner's
+approval, and a new page stays a draft until its intent is approved.
+
 ## Never touch the live install
 
 `~/.rundesk` is a running product with real agents in it, not a fixture. Never install, uninstall,
