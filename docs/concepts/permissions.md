@@ -65,6 +65,35 @@ the brain's and not rundesk's. It has not been measured for any brain that does 
 chain, so the honest instruction is the lineage line rather than an invocation: **if it does not say
 `gateway`, it is not one.**
 
+**A process in a turn answers `provider` when the platform names the provider's program as
+responsible for it.** Measured on 2026-11-11 from a Claude gateway turn: a shell the turn ran had the
+Claude CLI's program, at its versioned install path, as its responsible process, and not the gateway
+interpreter above it. The answer is about the process that asked and children that keep the same
+responsible process; a child that is made responsible for itself is a different client. The lineage
+line names the program by path:
+
+```console
+$ rundesk permissions lineage
+provider — /…/claude/versions/2.1.319
+  /…/claude/versions/2.1.319 is responsible for this process, and for children that keep it as
+  their responsible process
+```
+
+It is said only for a process started for an agent, whose responsible process is an ancestor in its
+parent chain whose own parent was read and is neither launchd nor a gateway shim. The gateway
+interpreter is launchd's own child, so a channel adapter or exported shell below it never reads as a
+provider. Anything else keeps the answer it had.
+
+**A provider update may leave the grants behind — an inference, not a measurement.** The research
+below (§1) measured macOS recording an ad-hoc signed interpreter outside an application by its path.
+A provider's program lives at a versioned path, so the same may hold when it updates; whether it
+does for a signed provider program has not been measured. `check` after an update is what finds out.
+
+**UI operations need a logged-in desktop.** A gateway is a LaunchAgent in the owner's login session.
+Accessibility, Apple Events to an application and synthesized input act on that session, so none of
+this makes UI automation work with nobody logged in, and nothing here proves a desktop is present.
+The `files` probes are not about this.
+
 ## Two things about a gateway's grants that surprise people
 
 **One grant covers every agent.** Two gateway shims differing only in the agent they name were

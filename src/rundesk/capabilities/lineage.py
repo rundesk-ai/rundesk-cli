@@ -26,7 +26,21 @@ this is** (the chain is where the name survives, because the shim `exec`s the in
 name is gone from the running image), and **whether this is an ssh session**, where no dialog can
 appear at all. So: identity from the platform, classification from the chain.
 
-## Five answers, and the last two are not the same
+## A provider's program can make itself responsible
+
+**Measured for the Claude CLI** inside a gateway turn: the platform names the provider's program,
+not the gateway interpreter above it, as responsible for a shell the turn ran. That is reported as
+`PROVIDER` and named by that program's path — not as `UNKNOWN`, and never as the gateway, whose own
+process is a different client. It is a fact about this process, and about children that keep its
+responsible process; a child that is made responsible for itself is not covered by it.
+
+A responsible ancestor whose parent is launchd is never called a provider's program. The gateway
+interpreter is launchd's own child — `gateways/job.py` has launchd spawn the shim, which `exec`s the
+interpreter in the same pid — so a channel adapter below it, or a shell that exported the agent's
+name, has the gateway or another launchd job responsible for it, and the agent name alone does not
+make that a provider.
+
+## Six answers, and the last two are not the same
 
 A chain read whole that matched nothing is **not** a chain nobody could read. `UNKNOWN` is a
 machine arranged in a way this release has not met; `CANNOT_TELL` is no information. Folding them
@@ -51,6 +65,12 @@ GATEWAY = "gateway"
 
 #: A descendant of an application bundle, named by its bundle identifier. Everything run by hand.
 TERMINAL = "terminal"
+
+#: Started for an agent, below a program that is not an application, is not a launchd job, and that
+#: the platform names as responsible for this process — measured as the provider CLI's own program
+#: inside a turn. Named by that program's path, because that is the client macOS checks for this
+#: process and for children that keep its responsible process.
+PROVIDER = "provider"
 
 #: A descendant of `sshd`. There is no login session, so **no consent dialog can appear at all** —
 #: which is a different situation from a denial and gets different advice.
@@ -146,7 +166,7 @@ def read(pid: int, *, shim: str, machine: Optional[Machine] = None,
     if mine is None:
         return Lineage(CANNOT_TELL, "", agent, [], f"nothing could be read about process {pid}")
 
-    chain, whole = _walked(pid, machine)
+    chain, above, whole = _walked(pid, machine)
     named_by_the_chain = _named_in(chain, shim)
 
     # The platform's own answer, asked for rather than inferred. A pid it will not answer about is
@@ -176,6 +196,16 @@ def read(pid: int, *, shim: str, machine: Optional[Machine] = None,
                        f"{responsible} is responsible for this process"
                        + (" — its identifier could not be read, so this is its name on disk"
                           if guessed else ""))
+
+    # Before the gateway, because a program that made itself responsible is the client for this
+    # process whatever started it. **Only an ancestor, only one whose parent is read and is neither
+    # launchd nor a gateway shim, and only for an agent**: the platform names the client, the chain
+    # says it stands above this process and is not a launchd job such as the gateway interpreter,
+    # and the agent name is what makes calling it a provider's program a fact rather than a guess.
+    if agent and answered != pid and _below_a_launchd_job(answered, above, chain, shim):
+        return Lineage(PROVIDER, responsible, agent, chain,
+                       f"{responsible} is responsible for this process, and for children that "
+                       "keep it as their responsible process")
 
     if named_by_the_chain is not None:
         return Lineage(GATEWAY, responsible, named_by_the_chain, chain,
@@ -249,31 +279,48 @@ def by_ps(waiting: float = PS_WITHIN) -> Callable[[int], Optional[Tuple[int, str
     return parent
 
 
-def _walked(pid: int, machine: Machine) -> Tuple[List[str], bool]:
-    """Every ancestor's command, nearest first, and whether the top was actually reached.
+def _walked(pid: int, machine: Machine) -> Tuple[List[str], List[int], bool]:
+    """Every ancestor's command and pid, nearest first, and whether the top was actually reached.
 
-    The second half is the point. A chain that stopped because nothing would answer looks exactly
+    The last part is the point. A chain that stopped because nothing would answer looks exactly
     like one that stopped at the top, and a caller that could not tell them apart would report
     `UNKNOWN` — a definite claim — about a tree it never saw.
     """
     chain: List[str] = []
+    above: List[int] = []
     seen = {pid}
     at = pid
     for _ in range(AS_FAR_AS):
         answered = machine.parent(at)
         if answered is None:
-            return chain, False
+            return chain, above, False
         up, called = answered
         # pid 1 is launchd and is the top; a pid that is its own parent, or one already seen, is a
         # loop rather than a top, and walking it is how a diagnosis hangs on a broken machine.
         if up in seen or up <= 0:
-            return chain, True
+            return chain, above, True
         chain.append(called)
+        above.append(up)
         seen.add(up)
         at = up
         if up == 1:
-            return chain, True
-    return chain, False
+            return chain, above, True
+    return chain, above, False
+
+
+def _below_a_launchd_job(answered: int, above: List[int], chain: List[str], shim: str) -> bool:
+    """Whether `answered` is an ancestor whose own parent was read and is neither launchd nor a shim.
+
+    `above` and `chain` are nearest first and in step, so an ancestor's parent is the next entry in
+    each. Either parent makes the ancestor a gateway interpreter or another launchd job. An ancestor
+    at the end of a walk that stopped is one whose parent nobody read, which is no evidence at all.
+    """
+    if answered not in above:
+        return False
+    at = above.index(answered)
+    if at + 1 >= len(above):
+        return False
+    return above[at + 1] != 1 and _named_in([chain[at + 1]], shim) is None
 
 
 def _named_in(chain: List[str], shim: str) -> Optional[str]:

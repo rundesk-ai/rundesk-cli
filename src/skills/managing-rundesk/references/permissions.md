@@ -28,6 +28,15 @@ through a brain's tool call can answer about that tool's program instead, becaus
 gateway shim out of the parent chain. Read the lineage line in the output rather than assuming the
 invocation: only a run that says `gateway` is a fact about the gateway.
 
+**A process that says `provider` is answered for by its provider's program.** The platform names
+the program at that path as responsible for this process, and for children that keep it as their
+responsible process; a child made responsible for itself is a different client. Report that path as
+the client for this process, not as the gateway. A provider update may move the path and, by
+inference from research on an ad-hoc signed interpreter, leave its grants behind; that is not
+measured for a signed provider, so run `check` again rather than trusting an older answer. UI
+operations — Accessibility, Apple Events to an application, synthesized input — need the owner
+logged in at the desktop; this says nothing about file permissions.
+
 Report the lineage together with any verdict. A verdict without the process it was measured in is not
 an answer the owner can act on.
 

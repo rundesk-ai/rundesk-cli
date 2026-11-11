@@ -238,6 +238,11 @@ program's grants, because the tool leaves the gateway shim out of the parent cha
 line rather than the invocation — only a run that says `gateway` is a fact about one, and the bare
 verb says so unprompted about anything stored from another lineage.
 
+A process started for an agent whose responsible process is the provider's program answers
+`provider`, named by that program's path: macOS checks that program's grants for this process and
+for children that keep it as their responsible process, not the gateway's. See
+[`concepts/permissions.md`](../concepts/permissions.md).
+
 ```console
 $ rundesk permissions check
 these answers are about this gateway (/opt/homebrew/…/Python.app/Contents/MacOS/Python)

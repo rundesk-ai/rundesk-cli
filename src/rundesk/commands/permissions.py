@@ -60,6 +60,16 @@ ABOUT_A_GATEWAY = (
     "away with no warning and this is what finds out")
 
 
+#: Said under a provider lineage. The update risk is **an inference**: macOS was measured recording an
+#: ad-hoc signed interpreter outside an application by its path
+#: (`docs/research/2026-08-08-what-this-mac-lets-a-process-do.md` §1), and a provider's program lives
+#: at a versioned path; it has not been measured for a signed provider program.
+ABOUT_A_PROVIDER = (
+    "macOS checks the program at the path above, not the gateway, for this process and for "
+    "children that keep it as their responsible process. That path is versioned, so a provider "
+    "update may leave its grants behind — inferred, not measured — and this is what finds out")
+
+
 def register(sub: argparse._SubParsersAction) -> None:
     """`rundesk permissions [list|lineage|check]`, built beside the verb."""
     kept = sub.add_parser("permissions", help="what this Mac lets rundesk do")
@@ -116,6 +126,8 @@ def _lineage() -> int:
         print(f"  below: {' ← '.join(whose.chain)}")
     if whose.how == lineage.GATEWAY:
         print(f"  {ABOUT_A_GATEWAY}")
+    if whose.how == lineage.PROVIDER:
+        print(f"  {ABOUT_A_PROVIDER}")
     if not whose.certain:
         print("nothing can be proved while this is the answer", file=sys.stderr)
         return FAILED
@@ -160,7 +172,12 @@ def _reported() -> int:
         # this command exists to find.
         print(f"  this process is {mine.named}, and what is below was proved by "
               f"{whose.get(NAMED)} — a different client, holding its own grants")
-    if whose.get(HOW) and whose.get(HOW) != lineage.GATEWAY:
+    if whose.get(HOW) == lineage.PROVIDER:
+        # Not the gateway's answer and not nobody's: it is about processes that have this program as
+        # their responsible process, and only about them.
+        print(f"  this was proved under {whose.get(NAMED)}, which answers for processes that keep "
+              "it as their responsible process — the gateway's own process is a different client")
+    elif whose.get(HOW) and whose.get(HOW) != lineage.GATEWAY:
         # **Measured, and the reason this line is unconditional.** A `permissions check` run by a
         # brain's tool call inside a turn was expected to be a descendant of the gateway shim and
         # reported `unknown` — the tool re-parents what it starts, so the shim is gone from the
@@ -207,6 +224,8 @@ def _checked(wanted: Sequence[str], everything: bool, verbose: bool,
     print(_about(whose))
     if whose.how == lineage.GATEWAY:
         print(ABOUT_A_GATEWAY)
+    if whose.how == lineage.PROVIDER:
+        print(ABOUT_A_PROVIDER)
     print()
 
     into = Path(tempfile.mkdtemp(prefix="rundesk-permissions-"))
@@ -245,6 +264,8 @@ def _about(whose: lineage.Lineage) -> str:
     named = f" ({whose.named})" if whose.named else ""
     if whose.how == lineage.GATEWAY:
         return f"these answers are about this gateway{named}"
+    if whose.how == lineage.PROVIDER:
+        return f"these answers are about this agent's provider program{named}"
     # **Said for every lineage that is not a gateway, and `unknown` is the one that had to be
     # measured.** Running this from inside a turn was documented as the way to ask on a gateway's
     # behalf; asked through a brain's tool call it answered `unknown`, named the brain's own
