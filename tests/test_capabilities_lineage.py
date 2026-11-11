@@ -146,6 +146,95 @@ class FromATerminal(unittest.TestCase):
         self.assertEqual("com.googlecode.iterm2", found.named)
 
 
+class InATurn(unittest.TestCase):
+    """A provider's program made itself responsible — measured for a turn below a gateway.
+
+    The shape is the measured one: the turn's shell runs below the provider's program, which runs
+    below its adapter and the gateway interpreter, and the platform names the provider's program —
+    not the gateway — as responsible for the shell.
+    """
+
+    PROVIDER_PROGRAM = "/x/providers/versions/2.1.319"
+
+    #: A gateway interpreter outside any application bundle. A bundled one is answered as a
+    #: terminal before this lineage is considered, so only this shape reaches the provider rule.
+    INTERPRETER = "/x/python/bin/python3.13"
+
+    def a_turn(self, responsible):
+        return a_machine(
+            images={100: PYTHON, 80: self.PROVIDER_PROGRAM, 70: self.INTERPRETER,
+                    60: self.INTERPRETER},
+            parents={100: (90, "/bin/zsh"), 90: (80, "claude"), 80: (70, self.INTERPRETER),
+                     70: (60, self.INTERPRETER), 60: (1, "/sbin/launchd")},
+            responsible=responsible,
+        )
+
+    def test_the_provider_program_is_named_and_not_called_unknown(self) -> None:
+        found = lineage.read(100, shim=SHIM, machine=self.a_turn({100: 80}), agent="marcus")
+        self.assertEqual(lineage.PROVIDER, found.how)
+        self.assertEqual(self.PROVIDER_PROGRAM, found.named)
+        self.assertEqual("marcus", found.agent)
+        self.assertTrue(found.certain)
+        self.assertFalse(found.can_be_asked)
+
+    def test_without_an_agent_it_is_not_guessed_to_be_a_provider(self) -> None:
+        found = lineage.read(100, shim=SHIM, machine=self.a_turn({100: 80}))
+        self.assertEqual(lineage.UNKNOWN, found.how)
+
+    def test_a_responsible_process_that_is_not_an_ancestor_is_not_a_provider(self) -> None:
+        """The chain is what says the program stands above this one; the platform alone does not."""
+        machine = a_machine(
+            images={100: PYTHON, 50: "/x/elsewhere"},
+            parents={100: (90, "/bin/zsh"), 90: (1, "/sbin/launchd")},
+            responsible={100: 50},
+        )
+        found = lineage.read(100, shim=SHIM, machine=machine, agent="marcus")
+        self.assertNotEqual(lineage.PROVIDER, found.how)
+
+    def test_a_gateway_interpreter_responsible_with_an_agent_set_is_not_a_provider(self) -> None:
+        """A channel adapter, or a shell that exported the agent name, below the gateway itself.
+
+        The gateway interpreter is launchd's own child (`gateways/job.py`: launchd spawns the shim
+        and the shim `exec`s the interpreter in the same pid), so a responsible ancestor whose
+        parent is launchd is a launchd job and not a provider's program, whatever the environment
+        says.
+        """
+        found = lineage.read(100, shim=SHIM, machine=self.a_turn({100: 60}), agent="marcus")
+        self.assertNotEqual(lineage.PROVIDER, found.how)
+        self.assertEqual(lineage.UNKNOWN, found.how)
+
+    def test_a_gateway_responsible_below_its_shim_stays_a_gateway(self) -> None:
+        machine = a_machine(
+            images={100: PYTHON, 90: self.INTERPRETER},
+            parents={100: (90, self.INTERPRETER), 90: (80, "rundesk-gateway-marcus"),
+                     80: (1, "launchd")},
+            responsible={100: 90},
+        )
+        found = lineage.read(100, shim=SHIM, machine=machine, agent="marcus")
+        self.assertEqual(lineage.GATEWAY, found.how)
+
+    def test_a_responsible_ancestor_whose_parent_is_unread_is_not_a_provider(self) -> None:
+        """No evidence that it is not a launchd job, so it is not called a provider's program."""
+        machine = a_machine(
+            images={100: PYTHON, 80: self.PROVIDER_PROGRAM},
+            parents={100: (80, "claude")},                   # 80's parent answers nothing
+            responsible={100: 80},
+        )
+        found = lineage.read(100, shim=SHIM, machine=machine, agent="marcus")
+        self.assertNotEqual(lineage.PROVIDER, found.how)
+
+    def test_a_provider_wins_over_a_shim_in_the_chain(self) -> None:
+        """This process's client is the responsible program, whatever gateway started it."""
+        machine = a_machine(
+            images={100: PYTHON, 80: self.PROVIDER_PROGRAM, 70: self.INTERPRETER},
+            parents={100: (80, "claude"), 80: (70, self.INTERPRETER),
+                     70: (90, "rundesk-gateway-marcus"), 90: (1, "launchd")},
+            responsible={100: 80},
+        )
+        found = lineage.read(100, shim=SHIM, machine=machine, agent="marcus")
+        self.assertEqual(lineage.PROVIDER, found.how)
+
+
 class OverSsh(unittest.TestCase):
     def test_sshd_is_remote_and_cannot_be_asked(self) -> None:
         machine = a_machine(
@@ -188,6 +277,7 @@ class TheThirdState(unittest.TestCase):
         is gone. The constants have to be compared with each other, once, or nothing checks them."""
         every = {"GATEWAY": lineage.GATEWAY, "TERMINAL": lineage.TERMINAL,
                  "REMOTE": lineage.REMOTE, "UNKNOWN": lineage.UNKNOWN,
+                 "PROVIDER": lineage.PROVIDER,
                  "CANNOT_TELL": lineage.CANNOT_TELL}
         self.assertEqual(len(every), len(set(every.values())),
                          f"two lineages share a word, so nothing tells them apart: {every}")

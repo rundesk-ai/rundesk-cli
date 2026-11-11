@@ -30,6 +30,11 @@ NOBODY = lineage.Lineage(lineage.CANNOT_TELL, "", None, [], "/bin/ps would not a
 A_TOOL = lineage.Lineage(lineage.UNKNOWN, "/opt/homebrew/bin/codex", "marcus", ["codex"],
                          "the parent chain was read whole and matched no lineage this release knows")
 
+#: What a shell in a turn below a gateway was measured answering once a provider lineage existed: the
+#: provider's program is its responsible process, so it is the client macOS checks for that shell.
+A_PROVIDER = lineage.Lineage(lineage.PROVIDER, "/x/providers/versions/2.1.319", "marcus",
+                             ["/bin/zsh", "claude"], "it is responsible for this process")
+
 ANOTHER_TERMINAL = lineage.Lineage(lineage.TERMINAL, "com.apple.Terminal", None, ["Terminal"],
                                    "Terminal.app is responsible for this process")
 
@@ -196,6 +201,30 @@ class WhatItKeeps(Permissions):
         _code, out, _err, _machine = self.permissions(whose=A_TOOL)
         self.assertIn("nothing here was proved in a gateway", out)
         self.assertIn("/opt/homebrew/bin/codex", out)
+
+    def test_a_provider_check_names_its_program_and_not_the_gateway(self) -> None:
+        _code, out, _err, _machine = self.permissions("check", "files", whose=A_PROVIDER)
+        first = out.splitlines()[0]
+        self.assertIn("provider program", first)
+        self.assertIn("/x/providers/versions/2.1.319", first)
+        self.assertIn("not the gateway", out)
+        self.assertIn("inferred, not measured", out)
+        self.assertNotIn("one grant covers every agent", out)
+
+    def test_the_lineage_verb_names_the_provider_program_as_this_processs_client(self) -> None:
+        with mock.patch("rundesk.commands.permissions._mine", return_value=A_PROVIDER):
+            code, out, _err = support.run_with(["permissions", "lineage"], probing=support.AMachine())
+        self.assertEqual(OK, code)
+        self.assertIn("provider — /x/providers/versions/2.1.319", out)
+        self.assertIn("not the gateway", out)
+
+    def test_a_provider_answer_reads_back_as_about_its_responsible_processes(self) -> None:
+        machine = support.AMachine(**{"-c": support.ran(0, "read")})
+        self.permissions("check", "files", whose=A_PROVIDER, machine=machine)
+        _code, out, _err, _machine = self.permissions(whose=A_PROVIDER)
+        self.assertIn("about provider (/x/providers/versions/2.1.319)", out)
+        self.assertIn("answers for processes that keep it as their responsible process", out)
+        self.assertNotIn("nothing here was proved in a gateway", out)
 
     def test_a_gateways_own_answer_is_not_qualified_out_of_existence(self) -> None:
         """The one lineage the line must not appear under, or nobody reads any of them."""
