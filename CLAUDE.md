@@ -20,7 +20,7 @@ checkout. A `docs/concepts/` page is the source of truth for its subsystem;
 1. Read `docs/BRIEF.md` and `docs/CODEMAP.md`, then `docs/api/`, `docs/concepts/layout.md`, and
    `docs/guides/development.md`; then the pages for what you are changing, and every file you edit.
 2. Load the smallest complete set of applicable runtime skills. Use `writing-skills` for bundled
-   skills, `naming-grammar-conventions` before choosing or changing recurring or cross-layer terms,
+   skills, `naming-software-terms` before choosing or changing recurring or cross-layer terms,
    and `managing-github` for pull requests or releases.
 3. Inspect `git status`, the relevant diff, and the current tests before editing. Preserve other
    people's changes and treat unfamiliar files as owned data, not cleanup candidates.
@@ -152,8 +152,7 @@ Keep documentation true in the same change as behavior.
 
 - Keep `docs/` in its layout. Only `README.md`, `BRIEF.md`, and `CODEMAP.md` sit at its root;
   every other page is in `api/`, `concepts/`, `guides/`, `extending/`, `requirements/`, or
-  `research/`. Use the `structuring-project-docs` skill before adding a home, moving a page, or
-  writing a requirement. Never create a second source of truth, and never create an empty home.
+  `research/`. Never create a second source of truth, and never create an empty home.
 - Keep pages thin. Lead with the fact, use a table wherever the content is tabular, and split a page
   that has grown past a screen per section rather than trimming it evenly.
 - Add a page's row to its home's `README.md` in the same change that adds the page. An index behind
