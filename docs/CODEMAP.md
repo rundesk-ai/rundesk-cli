@@ -89,8 +89,10 @@ agent-guide heading contract, and the repository template digests.
 ## Documentation (docs/)
 
 Three files at the root — `README.md`, `BRIEF.md`, `CODEMAP.md` — and every other page in a home:
-`api/` (10 pages), `concepts/` (12), `guides/` (8), `extending/` (3), `requirements/` (12),
-`research/` (33), plus `assets/`. Each home carries its own index.
+`wiki/` (13 pages), `api/` (10), `concepts/` (12), `guides/` (8), `extending/` (3),
+`requirements/` (12), `research/` (33), plus `assets/`. Each home but `wiki/` carries its own index;
+`wiki/` carries `wiki.toml`, whose sections are its index, and its pages are the source of truth.
+`scripts/dev-wiki.sh` runs the checker over them at a pinned release.
 
 ## Repository configuration (root)
 
@@ -99,4 +101,6 @@ Three files at the root — `README.md`, `BRIEF.md`, `CODEMAP.md` — and every 
 never a product dependency. `cli-versions.lock` — which vendor CLI version each shipped adapter was
 written against, and the captured stream that stands in for it so no suite needs an account or a
 network. `.github/workflows/build.yml` — the suites across `ubuntu-latest` and `macos-latest` on
-Python 3.9 and 3.13, plus a Ruff job.
+Python 3.9 and 3.13, a Ruff job, and a wiki job, all three required by the PR gate.
+`scripts/dev-wiki.sh` — the wiki checker, pinned to one wiki-builder release and never a product
+dependency.

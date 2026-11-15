@@ -41,3 +41,6 @@ old/
 
 # Where `./dev` points a run that must not reach the owner's install.
 .scratch/
+
+# The rendered wiki. `wiki build` writes it; the pages under docs/wiki/pages are the source.
+docs/wiki/site/
