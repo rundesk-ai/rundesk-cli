@@ -19,6 +19,7 @@ Run directly: `python3 tests/test_providers_grok.py`
 """
 
 import json
+import os
 import subprocess
 import unittest
 
@@ -149,6 +150,101 @@ class Capabilities(support.Isolated):
         self.assertEqual(0, got.returncode)
         self.assertTrue(can["tools"])
         self.assertNotIn("grok_cli", can)
+
+    def test_it_reports_support_for_additional_account_aliases(self):
+        _got, can = self.answered()
+        self.assertTrue(can["account_aliases"])
+
+
+class SubscriptionAccounts(support.Isolated):
+    def fake_grok(self):
+        instead = self.home / "bin"
+        instead.mkdir(exist_ok=True)
+        observed = self.home / "observed.json"
+        brain = instead / "grok"
+        brain.write_text('''#!/usr/bin/env python3
+import json, os, signal, sys
+with open(os.environ["OBSERVED"], "w", encoding="utf-8") as writing:
+    json.dump({"argv": sys.argv[1:], "GROK_HOME": os.environ.get("GROK_HOME"),
+               "OWNER_MARKER": os.environ.get("OWNER_MARKER")}, writing)
+if os.environ.get("FAKE_SIGNAL"):
+    os.kill(os.getpid(), signal.SIGTERM)
+if os.environ.get("FAKE_STDOUT"):
+    print(os.environ["FAKE_STDOUT"])
+if os.environ.get("FAKE_STDERR"):
+    print(os.environ["FAKE_STDERR"], file=sys.stderr)
+raise SystemExit(int(os.environ.get("FAKE_CODE", "0")))
+''', encoding="utf-8")
+        brain.chmod(0o755)
+        return instead, observed
+
+    def called(self, option, stdout="", code=0, **also):
+        instead, observed = self.fake_grok()
+        env = os.environ.copy()
+        env.update({"PATH": f"{instead}:/usr/bin:/bin", "OBSERVED": str(observed),
+                    "FAKE_STDOUT": stdout, "FAKE_CODE": str(code)})
+        env.update(also)
+        got = subprocess.run([str(ADAPTER), option], capture_output=True, text=True,
+                             timeout=PATIENCE, env=env, check=False)
+        return got, json.loads(observed.read_text(encoding="utf-8"))
+
+    def test_the_default_account_keeps_the_existing_home_and_environment(self):
+        got, observed = self.called("--account-status",
+                                    stdout="You are logged in with grok.com.",
+                                    GROK_HOME="owners-home", OWNER_MARKER="preserved")
+        self.assertEqual({"state": "authenticated"}, json.loads(got.stdout))
+        self.assertEqual(["models"], observed["argv"])
+        self.assertEqual("owners-home", observed["GROK_HOME"])
+        self.assertEqual("preserved", observed["OWNER_MARKER"])
+
+    def test_an_alias_uses_its_private_home(self):
+        account_home = self.home / "provider-accounts" / "grok" / "work" / "home"
+        account_home.mkdir(parents=True)
+        got, observed = self.called(
+            "--account-status", stdout="You are not authenticated.\n\nDefault model: grok-4.6",
+            RUNDESK_PROVIDER_ALIAS="work", RUNDESK_PROVIDER_ACCOUNT_HOME=str(account_home),
+            GROK_HOME="owners-home", OWNER_MARKER="preserved")
+        self.assertEqual({"state": "signed_out"}, json.loads(got.stdout))
+        self.assertEqual(["models"], observed["argv"])
+        self.assertEqual(str(account_home), observed["GROK_HOME"])
+        self.assertEqual("preserved", observed["OWNER_MARKER"])
+
+    def test_login_and_logout_use_groks_native_commands_for_the_same_alias(self):
+        account_home = self.home / "provider-accounts" / "grok" / "work" / "home"
+        account_home.mkdir(parents=True)
+        for option, command in (("--account-login", "login"),
+                                ("--account-logout", "logout")):
+            with self.subTest(option=option):
+                got, observed = self.called(
+                    option, RUNDESK_PROVIDER_ACCOUNT_HOME=str(account_home))
+                self.assertEqual(0, got.returncode)
+                self.assertEqual([command], observed["argv"])
+                self.assertEqual(str(account_home), observed["GROK_HOME"])
+
+    def test_only_subscription_login_status_is_recognized(self):
+        for stdout, expected in (
+                ("You are logged in with grok.com.", "authenticated"),
+                ("You are not authenticated.", "signed_out"),
+                ("You are logged in eventually", "unable_to_check")):
+            with self.subTest(stdout=stdout):
+                got, _observed = self.called("--account-status", stdout=stdout)
+                self.assertEqual({"state": expected}, json.loads(got.stdout))
+
+    def test_interrupted_and_conflicting_statuses_are_not_authoritative(self):
+        fixtures = (("You are logged in with grok.com.", 2, {}),
+                    ("You are logged in with grok.com.\nYou are not authenticated.", 0, {}),
+                    ("", 0, {"FAKE_SIGNAL": "1"}))
+        for status, code, also in fixtures:
+            with self.subTest(status=status, code=code, also=also):
+                got, _observed = self.called("--account-status", stdout=status, code=code, **also)
+                self.assertEqual(1, got.returncode)
+                self.assertEqual({"state": "unable_to_check"}, json.loads(got.stdout))
+
+    def test_a_missing_grok_is_not_reported_as_an_account_state(self):
+        got = subprocess.run([str(ADAPTER), "--account-status"], capture_output=True, text=True,
+                             timeout=PATIENCE, env={"PATH": NO_VENDOR}, check=False)
+        self.assertEqual(1, got.returncode)
+        self.assertEqual({"state": "unable_to_check"}, json.loads(got.stdout))
 
 
 class OneCapturedTurn(support.Isolated):
@@ -349,7 +445,8 @@ class WhatItAsksTheBrainFor(support.Isolated):
     BRAIN = '''#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ["HEARD"], "a") as writing:
-    writing.write(json.dumps({"argv": sys.argv[1:]}) + "\\n")
+    writing.write(json.dumps({"argv": sys.argv[1:], "GROK_HOME": os.environ.get("GROK_HOME"),
+                              "OWNER_MARKER": os.environ.get("OWNER_MARKER")}) + "\\n")
 if "--capabilities" in sys.argv[1:]:
     print('{"tools": true}'); raise SystemExit(0)
 
@@ -438,6 +535,22 @@ for line in sys.stdin:
     def test_it_asks_for_the_transport_the_vendor_documents(self):
         self.spoken = self.spoke()
         self.assertEqual(["agent", "--always-approve", "stdio"], self.argv()[-3:])
+
+    def test_an_alias_turn_uses_the_same_private_subscription_login(self):
+        account_home = self.home / "provider-accounts" / "grok" / "work" / "home"
+        account_home.mkdir(parents=True)
+        self.spoken = self.spoke(RUNDESK_PROVIDER_ALIAS="work",
+                                 RUNDESK_PROVIDER_ACCOUNT_HOME=str(account_home),
+                                 GROK_HOME="owners-home", OWNER_MARKER="preserved")
+        started = next(one for one in self.spoken if "argv" in one)
+        self.assertEqual(str(account_home), started["GROK_HOME"])
+        self.assertEqual("preserved", started["OWNER_MARKER"])
+
+    def test_an_unaliased_turn_keeps_the_existing_grok_home(self):
+        self.spoken = self.spoke(GROK_HOME="owners-home", OWNER_MARKER="preserved")
+        started = next(one for one in self.spoken if "argv" in one)
+        self.assertEqual("owners-home", started["GROK_HOME"])
+        self.assertEqual("preserved", started["OWNER_MARKER"])
 
     def test_one_conversation_never_answers_out_of_another(self):
         """**`--no-memory` is not a preference.** Without it this brain answers from conversations
