@@ -455,6 +455,7 @@ for goes to stderr; see [the rules](#the-rules-that-will-bite).
 | `text` | required unless `attachments` | what was said. Clipped at 64 KiB rather than refused |
 | `attachments` | required unless `text` | what they attached, already fetched onto this machine — see below |
 | `external_id` | optional | the platform's own id for this message. **Without it there is no redelivery guard and no `seen` mark** |
+| `receipt` | optional | nonempty string, at most 64 characters; requests one recording outcome before answering starts |
 | `display` | optional | what the platform calls the person speaking. Reaches the brain, so an agent in a room can address somebody by name |
 | `mention` | optional | **your platform's own markup for mentioning the speaker** — `<@U012ABCDEF>` on Slack, `<@123456789012345678>` on Discord. It reaches the brain beside the name with one instruction: it is for mentioning that person and is never said as words, and the bare id never reaches a prompt at all. One token, at most 64 characters, or rundesk drops it rather than teaching half a handle. Send only a handle your own `deliver` path carries to the platform as a real mention |
 | `where` | optional | **one ordinary sentence** saying where this was said — `a direct message`, `the ops room in Acme`. Rundesk never parses it and never names a room itself; what a place is called is the one thing only you know |
@@ -500,6 +501,23 @@ nothing is recorded.
 nothing the second time, because the message lands once. Without it, two identical lines are two
 things somebody said. The previous build had the column and the index and no adapter ever passed an
 id through the seam, so the guard was correct and prevented nothing.
+
+**`receipt` optionally asks for a recording outcome.** Supply a nonempty string of at most 64
+characters. Rundesk writes one `{"do":"received","receipt":"…","outcome":"…"}` back to
+that adapter before starting the answer thread. Missing, empty, non-string and overlong tokens are
+ignored, never clipped. Adapters that supply no receipt receive the existing records alone.
+
+| Outcome | Recorded fact |
+|---|---|
+| `refused` | the sender and external place were not admitted; nothing was recorded |
+| `invalid` | no conversation, or neither text nor attachments; nothing was recorded |
+| `empty` | files only, and no file could be taken in; nothing was recorded |
+| `accepted` | the new message was committed |
+| `duplicate` | that external message was already committed in this conversation |
+
+An exception while taking in files or recording earns no receipt: the adapter may redeliver with
+the same `external_id`. A receipt says nothing about whether a provider turn started or finished.
+It is a pipe write, with no durable gateway outbox; an adapter that misses it may redeliver safely.
 
 Each entry of `attachments`:
 
@@ -553,7 +571,7 @@ are still not asked for; nothing reads a member list or a presence.
 
 ### What an adapter is told — `do:`
 
-Five, and only five exist today.
+Seven record kinds exist today. `received` is sent only when an `arrived` supplies a valid receipt.
 
 ```json
 {"do": "deliver", "id": "1754431200.123456-0-7", "place": "1180", "text": "Three files changed…",
@@ -573,6 +591,7 @@ Five, and only five exist today.
 {"do": "delegation", "place": "1180", "state": "answered", "who": "dev", "ask": "del-41-4e07c5",
  "elapsed": "1m", "provider": "claude", "provider_alias": "work"}
 {"do": "answered", "ref": "c-91f2", "text": "3 schedules, next at 09:00"}
+{"do": "received", "receipt": "r1", "outcome": "accepted"}
 {"do": "stop"}
 ```
 
@@ -583,6 +602,7 @@ Five, and only five exist today.
 | `activity` | `place`, `did`, sometimes `ok`, sometimes `who` | show what the agent is doing, while it is still doing it |
 | `delegation` | `place`, `state`, `who`, `ask`, sometimes `elapsed`, sometimes `provider` and with it sometimes `provider_alias` | show what became of work this agent handed to another agent, which brain is doing it, and what has just been done to it |
 | `answered` | `ref`, `text` | the answer to a `control`, `query` or `configure` you sent, against the `ref` you gave it |
+| `received` | `receipt`, `outcome` | the recording outcome for an `arrived` that requested a receipt; never a provider outcome |
 | `stop` | — | stop. The signals follow either way |
 
 **A long answer arrives as several `deliver` records, and `files` go with the last of them.** The

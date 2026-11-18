@@ -1459,6 +1459,7 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any],
     kind = one.kind
     who = str(record.get("user") or "")
     if not admitting.admits(who, _where_said(record)):
+        _received(where, one, record, "refused")
         return
     place = str(record.get("conversation") or "")
     body = str(record.get("text") or "")
@@ -1466,8 +1467,10 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any],
     brought = brought if isinstance(brought, list) else []
     external = _a_text(record.get("external_id"))
     if not place:
+        _received(where, one, record, "invalid")
         return
     if not body and not brought:
+        _received(where, one, record, "invalid")
         return
     if brought:
         # **A message that is only a file is still a message.** Requiring text dropped it in total
@@ -1476,6 +1479,7 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any],
         if not body and not here:
             _note(where, f"channel {kind}: a message in {place} brought only files that could not "
                          f"be taken in, so there was nothing to record", logs.WARNING)
+            _received(where, one, record, "empty")
             return
         body = _also_attached(body, here)
     # After the attachments, so the two blocks always stand in one order however many arrived — and
@@ -1493,6 +1497,7 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any],
         # adapter that has just restarted no longer knows it put one up.
         _said_to(where, one, {"do": "state", "place": place, "external_id": external,
                               "state": SEEN})
+    _received(where, one, record, "accepted" if landed.fresh else "duplicate")
     if not landed.fresh:
         # The same message arriving twice. It is marked seen again above, because that mark belongs
         # to the message and an adapter that has just restarted no longer knows it put one up — but
@@ -1507,6 +1512,17 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any],
     # **Handed on, never run here.** This is the thread reading one adapter's output, and a turn
     # takes minutes — see `Answering`.
     one.answering.answer(agent, kind, place, who, body, external, landed)
+
+
+def _received(where: Path, one: Running, record: Dict[str, Any], outcome: str) -> None:
+    """A receipt acknowledges recording, before any answering thread can run.
+
+    Invalid tokens are ignored rather than clipped: a clipped token could acknowledge another
+    message. Exceptions before this point deliberately earn no receipt, leaving redelivery safe.
+    """
+    receipt = record.get("receipt")
+    if isinstance(receipt, str) and 0 < len(receipt) <= 64:
+        _said_to(where, one, {"do": "received", "receipt": receipt, "outcome": outcome})
 
 
 def _where_said(record: Dict[str, Any]) -> str:
