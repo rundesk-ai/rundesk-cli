@@ -1145,8 +1145,10 @@ class AProgramThatKeepsRunning(support.Isolated):
             "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
             f"pathlib.Path({str(marker)!r}).write_text(str(child.pid))\n"
             "time.sleep(60)\n")
-        self.assertTrue(support.waited_until(marker.exists, self.PATIENCE),
-                        "the child never started")
+        # `write_text` creates the file before it writes the pid, so existing is not yet saying.
+        self.assertTrue(support.waited_until(
+            lambda: marker.exists() and marker.read_text().isdigit(), self.PATIENCE),
+            "the child never started")
         child = int(marker.read_text())
         self.assertTrue(programs.alive(child))
 
