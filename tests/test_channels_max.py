@@ -279,6 +279,71 @@ class ScriptedCore(support.Isolated):
         self.assertEqual([3, 3, 3], waits)
         self.assertEqual({"g:1"}, self.core.open_work)
 
+    def test_prolonged_work_polls_and_receives_steer_and_stop_until_ended(self):
+        polls = []
+        steer = {"run": 2, "attempt": 1, "conversation": "t1", "user": "m1",
+                 "text": "  steer\n", "external_place": "d"}
+        stop = {"say": "control", "control": "stop", "conversation": "t1",
+                "user": "m1", "ref": "stop-long"}
+
+        def reply(route, body):
+            if route == "records" and not self.release.is_set():
+                self.recording.set()
+                return 503, {}, {"Retry-After": "3"}
+            if route == "inbox":
+                polls.append(time.monotonic())
+                if len(polls) == 3:
+                    return 200, {"runs": [steer]}, {}
+                if len(polls) == 4:
+                    return 200, {"commands": [stop]}, {}
+            return self.reply(route, body)
+
+        self.script = reply
+        self.core.active_poll, self.core.idle_poll = 3, 15
+        self.core.inbox({"runs": [{"run": 1, "attempt": 1, "conversation": "t1",
+                                   "user": "m1", "text": "work"}]})
+        self.core.accept({"do": "received", "receipt": "1.1", "outcome": "accepted"})
+        self.core.accept({"do": "state", "state": "working", "work": "g:long",
+                          "place": "t1", "for": "1.1"})
+        began = time.monotonic()
+        self.start("post", "poll")
+        self.assertTrue(self.recording.wait(2), self.calls)
+
+        # Real elapsed time is the acceptance boundary; accelerated polling cannot prove it.
+        deadline = began + 46
+        while time.monotonic() < deadline:
+            self.assertEqual({"g:long"}, self.core.open_work)
+            self.assertEqual(1, self.core.cursor)
+            self.assertFalse(any(s.get("say") in {"failed", "delivered"} for s in self.said))
+            self.assertTrue(all(thread.is_alive() for thread in self.threads), self.said)
+            self.assertFalse(self.core.stopped.wait(min(0.1, max(0, deadline - time.monotonic()))))
+
+        self.until(lambda: polls and polls[-1] - began > 45)
+        self.assertGreaterEqual(len(polls), 16)
+        self.assertTrue(all(b - a >= 3 for a, b in zip(polls, polls[1:])), polls)
+        self.assertFalse(any("wait" in call[0] for call in self.calls))
+        self.assertIn(stop, self.said)
+        arrived = next(s for s in self.said if s.get("receipt") == "2.1")
+        self.assertEqual(("arrived", "2.1", "  steer\n"),
+                         (arrived["say"], arrived["external_id"], arrived["text"]))
+        self.assertEqual({"g:long"}, self.core.open_work)
+        self.assertEqual({1}, {c[1]["seq"] for c in self.calls if c[0] == "records"})
+
+        self.core.accept({"do": "received", "receipt": "2.1", "outcome": "accepted"})
+        self.core.accept({"do": "deliver", "id": "long-answer", "text": "answer",
+                          "place": "t1", "reply_to": "1.1"})
+        self.release.set()
+        self.until(lambda: self.core.cursor == 5)
+        self.assertIn({"say": "delivered", "id": "long-answer", "external_id": "message-1"}, self.said)
+        self.assertEqual({"g:long"}, self.core.open_work)
+        self.core.accept({"do": "work", "work": "g:long", "place": "t1", "for": "1.1",
+                          "ended": "answered", "marked": "1.1", "state": "done"})
+        self.until(lambda: self.core.cursor == 6)
+        self.assertEqual(set(), self.core.open_work)
+        terminal = next(c[1] for c in self.calls if c[0] == "records" and c[1]["seq"] == 5)
+        self.assertEqual(("answered", "1.1", "succeeded"),
+                         (terminal["ended"], terminal["marked"], terminal["state"]))
+
     def test_slow_post_does_not_block_steering_stop_or_new_arrival(self):
         def reply(route, body):
             if route == "records":
