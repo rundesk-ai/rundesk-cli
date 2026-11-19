@@ -6,6 +6,7 @@ Outbound files are verified and snapshotted before they are journalled, then sta
 """
 
 import argparse
+import collections
 import contextlib
 import errno
 import fcntl
@@ -290,15 +291,21 @@ class Client:
                 raise Refused("Max refused a file (HTTP %d)" % response.code)
             at.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             written = 0
-            with open(os.open(str(at), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as out:
-                while True:
-                    block = response.read(min(1024 * 1024, declared + 1 - written))
-                    if not block:
-                        break
-                    written += len(block)
-                    out.write(block)
-                    if written > declared:
-                        break
+            try:
+                with open(os.open(str(at), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as out:
+                    while True:
+                        block = response.read(min(1024 * 1024, declared + 1 - written))
+                        if not block:
+                            break
+                        written += len(block)
+                        out.write(block)
+                        if written > declared:
+                            break
+            except BaseException:
+                # A body cut off mid-read must not leave a partial file nobody reports or removes.
+                with contextlib.suppress(OSError):
+                    at.unlink()
+                raise
             if written != declared:
                 at.unlink()
                 # A cut-off body is retried; one longer than Max declared never becomes whole.
@@ -375,9 +382,10 @@ def a_snapshot(said: Any, into: Path) -> Dict[str, Any]:
             fcntl.fcntl(descriptor, fcntl.F_SETFL,
                         fcntl.fcntl(descriptor, fcntl.F_GETFL) & ~os.O_NONBLOCK)
         into.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        with os.fdopen(descriptor, "rb") as reading, \
-                open(os.open(str(into), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as kept:
-            descriptor = None
+        reading = os.fdopen(descriptor, "rb")
+        descriptor = None                      # the file object owns it, even if `into` fails
+        with reading, open(os.open(str(into), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600),
+                           "wb") as kept:
             while size <= expected:
                 block = reading.read(min(1024 * 1024, expected + 1 - size))
                 if not block:
@@ -422,11 +430,17 @@ class Core:
                         if allowed is None else allowed)
         #: Staged upload ids by (delivery id, file index), with when each was staged.
         self.uploads: Dict[Tuple[str, int], Tuple[str, float]] = {}
-        #: Notice fan-out by Rundesk's delivery id: copies left, and whether any landed.
+        #: Notice fan-out by Rundesk's delivery id: copies settled, and whether any landed.
         self.groups: Dict[str, Dict[str, Any]] = {}
+        #: Rundesk delivery ids already answered, so a rewound replay never answers twice.
+        self.answered: "collections.OrderedDict[str, None]" = collections.OrderedDict()
+        #: Pieces sent so far into each (reply_to, threaded) discussion.
+        self.pieces: "collections.OrderedDict[Tuple[str, str], int]" = collections.OrderedDict()
         #: Snapshot folders being written whose record is not yet journalled.
         self.making: set = set()
         self.cursor = applied + 1
+        #: The highest sequence Max has shown it applied; only snapshots at or below it may go.
+        self.confirmed = applied
         self.active_poll, self.idle_poll = active_poll, idle_poll
         self.stopped = threading.Event()
         self.changed = threading.Event()
@@ -495,7 +509,7 @@ class Core:
                     self.open_work.discard(record.get("work"))
             elif kind == "state" and record.get("state") == "working":
                 self.open_work.add(record.get("work") or "legacy:" + record["place"])
-            elif kind == "state" and not record.get("work"):
+            elif kind == "state" and not record.get("work") and record.get("state") != "seen":
                 self.open_work.discard("legacy:" + record.get("place", ""))
         self.changed.set()
 
@@ -507,6 +521,15 @@ class Core:
         if answering is not None and not (isinstance(answering, str) and A_RUN.fullmatch(answering)):
             record.pop("reply_to", None)
             record.pop("threaded", None)
+        if record.get("threaded") and record.get("reply_to"):
+            # Every piece of a threaded report carries the anchor; only the first may link the run.
+            key = (record["reply_to"], str(record["threaded"]))
+            with self.lock:
+                record["piece"] = self.pieces.get(key, 0)
+                self.pieces[key] = record["piece"] + 1
+                self.pieces.move_to_end(key)
+                while len(self.pieces) > 1000:
+                    self.pieces.popitem(last=False)
         aimed = record.get("to")
         if aimed is not None:
             if not isinstance(aimed, dict):
@@ -538,11 +561,13 @@ class Core:
         copies = []
         for person in people:
             copy = dict(record, id="%s/%s" % (given, person), to={"sender": person}, of=given)
-            for key in ("place", "reply_to", "threaded"):
+            for key in ("place", "reply_to", "threaded", "piece"):
                 copy.pop(key, None)
             copies.append(copy)
+        # Known before any copy is journalled, so the poster never sees a partial group.
         with self.lock:
-            self.groups[given] = {"left": len(copies), "landed": False}
+            self.groups[given] = {"copies": {copy["id"] for copy in copies}, "settled": set(),
+                                  "landed": False}
         return copies
 
     def staged(self, row: Dict[str, Any]) -> Optional[List[str]]:
@@ -571,39 +596,69 @@ class Core:
             ids.append(body["upload"])
         return ids
 
+    def answer(self, record: Dict[str, Any]) -> None:
+        """Say one delivery's outcome to Rundesk, at most once per id."""
+        with self.lock:
+            if record["id"] in self.answered:
+                return
+            self.answered[record["id"]] = None
+            while len(self.answered) > 10000:
+                self.answered.popitem(last=False)
+        self.say(record)
+
+    def group(self, given: str) -> Dict[str, Any]:
+        """A notice's copies, rebuilt from the journal when this process did not journal them."""
+        group = self.groups.get(given)
+        if group is None:
+            with self.journal.lock:
+                rows = [row for row in self.journal.records if row.get("of") == given]
+            settled = {row["id"] for row in rows if row["seq"] < self.cursor}
+            # Copies settled by an earlier process may have landed; that is not known here.
+            group = {"copies": {row["id"] for row in rows}, "settled": settled,
+                     "landed": None if settled else False}
+            self.groups[given] = group
+        return group
+
     def settled(self, row: Dict[str, Any], external: Optional[str], why: str) -> None:
         """Report one delivery's outcome; a notice's copies answer Rundesk's one id once."""
-        for key in [key for key in self.uploads if key[0] == str(row.get("id"))]:
-            del self.uploads[key]
         given = row.get("of")
         if given is None:
             if external is not None:
-                self.say({"say": "delivered", "id": row.get("id"), "external_id": external})
+                self.answer({"say": "delivered", "id": row.get("id"), "external_id": external})
             else:
-                self.say({"say": "failed", "id": row.get("id"), "why": why})
+                self.answer({"say": "failed", "id": row.get("id"), "why": why})
             return
         with self.lock:
-            group = self.groups.get(given)
-            first = group is None or not group["landed"]
-            if group is not None:
-                group["left"] -= 1
-                group["landed"] = group["landed"] or external is not None
-                if group["left"] <= 0:
-                    del self.groups[given]
+            group = self.group(given)
+            again = row["id"] in group["settled"]
+            group["settled"].add(row["id"])
+            if external is not None:
+                group["landed"] = True
+            whole = group["settled"] >= group["copies"]
+            landed = group["landed"]
+            if whole:
+                del self.groups[given]
+        if again:
+            return
         if external is not None:
-            if first:
-                self.say({"say": "delivered", "id": given, "external_id": external})
+            self.answer({"say": "delivered", "id": given, "external_id": external})
             return
         self.note("notice copy for %s was not delivered: %s" % (row["to"]["sender"], why))
-        if group is not None and group["left"] <= 0 and not group["landed"]:
-            self.say({"say": "failed", "id": given,
-                      "why": "no allowed Max member received the notice: " + why})
+        if whole and landed is False:
+            self.answer({"say": "failed", "id": given,
+                         "why": "no allowed Max member received the notice: " + why})
+        elif whole and landed is None:
+            self.note("notice %s: no copy landed after the restart, and earlier copies are "
+                      "not known here" % given)
 
     def prune(self) -> None:
-        """Remove snapshots no unsent record names. A folder still being written is kept."""
+        """Remove snapshots only records Max has shown it applied name; a rewind may need the rest."""
         with self.journal.lock:
-            wanted = {row.get("snapshot") for row in self.journal.records
-                      if row["seq"] >= self.cursor}
+            kept = [row for row in self.journal.records if row["seq"] > self.confirmed]
+        wanted = {row.get("snapshot") for row in kept}
+        ids = {str(row.get("id")) for row in kept}
+        for key in [key for key in self.uploads if key[0] not in ids]:
+            del self.uploads[key]
         with self.lock:
             wanted |= self.making
         outbox = self.home / "outbox"
@@ -638,6 +693,7 @@ class Core:
                         raise ValueError("Max allocation omitted stream")
                     self.journal.allocated(stream)
                     self.cursor = 1
+                    self.confirmed = 0
                 row = self.journal.at_seq(self.cursor)
                 if row is None:
                     self.changed.wait(0.2)
@@ -663,10 +719,12 @@ class Core:
                         return
                     self.note("Max requested journal sequence %d" % expected)
                     self.cursor = expected
+                    self.confirmed = max(self.confirmed, expected - 1)
                     continue
                 if status == 409 and "current_stream" in body:
                     raise Superseded("Max stream no longer matches this journal")
-                if status == 429:
+                if status in {423, 429}:
+                    # 423: the binding is paused (Chat switched off); nothing was consumed.
                     self.stopped.wait(retry_after(headers))
                 elif 200 <= status < 300 or 400 <= status < 500:
                     if row["do"] == "deliver":
@@ -677,7 +735,9 @@ class Core:
                         else:
                             raise ValueError("Max delivery response omitted id")
                     self.cursor += 1
-                    if row.get("snapshot"):
+                    # A refusal may not have consumed its sequence; only a success proves it did.
+                    if 200 <= status < 300:
+                        self.confirmed = max(self.confirmed, row["seq"])
                         self.prune()
                 else:
                     self.stopped.wait(retry_after(headers))
@@ -725,6 +785,9 @@ class Core:
                 self.say(command)
                 fresh = True
         for run in body.get("runs", []):
+            if not all(type(run.get(key)) is int and run[key] > 0 for key in ("run", "attempt")):
+                self.note("Max described a run this adapter cannot name")
+                continue
             receipt = "%s.%s" % (run["run"], run["attempt"])
             now = time.monotonic()
             with self.lock:
@@ -746,7 +809,7 @@ class Core:
                 self.pending[receipt] = (now + min(60, 3 * (2 ** min(tries, 5))), tries + 1)
             try:
                 landed = self.fetched(run.get("attachments") or [], receipt)
-            except (OSError, http.client.HTTPException) as why:
+            except (OSError, ValueError, http.client.HTTPException) as why:
                 # Not handed on: the claimed run is offered again after its backoff.
                 self.note("Max file deferred for %s (%s)" % (receipt, why))
                 continue
@@ -875,7 +938,8 @@ def search(client: Client, asked: Dict[str, Any],
     limit = limit if type(limit) is int and 1 <= limit <= 100 else 20
     started = clock()
     results: List[Dict[str, Any]] = []
-    looked: Optional[int] = 0
+    looked: Optional[int] = None
+    unmeasured = False
     cursor = None
     partial = ""
     while len(results) < limit:
@@ -903,8 +967,9 @@ def search(client: Client, asked: Dict[str, Any],
             partial = "Max refused a later page (HTTP %d)" % status
             break
         for hit in body.get("hits") or []:
+            # Max describes no attachments on a hit, so one without text could not be shown.
             if (isinstance(hit, dict) and isinstance(hit.get("ref"), str) and hit.get("user")
-                    and isinstance(hit.get("at"), str)):
+                    and isinstance(hit.get("at"), str) and hit.get("text")):
                 one = {"who": str(hit["user"]), "when": hit["at"], "text": str(hit.get("text") or ""),
                        "ref": hit["ref"][:64]}
                 for key, field in (("display", "display"), ("link", "link"),
@@ -913,13 +978,16 @@ def search(client: Client, asked: Dict[str, Any],
                         one[field] = hit[key]
                 results.append(one)
         counted = (body.get("looked") or {}).get("messages") if isinstance(body.get("looked"), dict) else None
-        looked = looked + counted if looked is not None and type(counted) is int else None
+        if type(counted) is int:
+            looked = (looked or 0) + counted
+        else:
+            unmeasured = True
         cursor = body.get("before")
         if not isinstance(cursor, str) or not cursor:
             break
     answer: Dict[str, Any] = {"ok": True, "results": results[:limit], "partial": partial}
-    # A count Max did not give is left out rather than guessed.
-    if looked is not None:
+    # A count Max did not give, for any page, is left out rather than guessed.
+    if looked is not None and not unmeasured:
         answer["looked"] = {"messages": looked}
     return answer
 
@@ -958,8 +1026,12 @@ def fetch(client: Client, asked: Dict[str, Any], home: Path,
                             lambda ident: "messages/%s/%s/attachments/%d" % (thread, message, ident),
                             missed.append, first=n)
         except Superseded:
+            # Rundesk removes only what an ok answer reports, so nothing may be left behind.
+            for one in landed:
+                with contextlib.suppress(OSError):
+                    os.unlink(one["at"])
             return {"ok": False, "why": "the Max binding was revoked; reconnect the channel"}
-        except (OSError, http.client.HTTPException) as why:
+        except (OSError, ValueError, http.client.HTTPException) as why:
             missed.append(str(why))
     return {"ok": True, "message": message, "attachments": landed,
             "partial": "; ".join(missed)}

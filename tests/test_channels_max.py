@@ -880,6 +880,98 @@ class ScriptedParity(Scripted):
         posted = self.records()[0]
         self.assertEqual(dict(record, seq=1, stream=1), posted)
 
+    def test_notice_copies_journalled_before_a_restart_still_answer_once(self):
+        self.journal.allocated(1)
+        for person in ("m1", "m2"):
+            self.journal.append({"do": "deliver", "id": "n/" + person, "text": "x", "notice": True,
+                                 "to": {"sender": person}, "of": "n"})
+        self.script = lambda route, body: (403, {}, {}) if route == "records" else self.reply(route, body)
+        self.start("post")
+        self.until(lambda: self.core.cursor == 3)
+        self.assertEqual([("failed", "n")], [(s["say"], s["id"]) for s in self.said
+                                             if s["say"] in {"delivered", "failed"}])
+
+    def test_rewound_delivery_keeps_its_snapshot_and_never_answers_twice(self):
+        answers = {"deliver": [(403, {}, {}), (201, {"id": "late"}, {})],
+                   "answered": [(409, {"expected": 1}, {}), (200, {}, {})]}
+        uploads = []
+
+        def reply(route, body):
+            if route == "uploads":
+                uploads.append(1)
+                return 201, {"upload": "00000000-0000-4000-8000-00000000000%d" % len(uploads)}, {}
+            if route == "records":
+                return answers[body["do"]].pop(0)
+            return self.reply(route, body)
+
+        self.script = reply
+        self.core.accept({"do": "deliver", "id": "d", "place": "t9", "text": "x", "files": [self.approved()]})
+        self.core.accept({"do": "answered", "ref": "c", "text": "after"})
+        self.start("post")
+        self.until(lambda: self.core.cursor == 3)
+        outcomes = [s for s in self.said if s["say"] in {"delivered", "failed"}]
+        self.assertEqual([("failed", "d")], [(s["say"], s["id"]) for s in outcomes])
+        self.assertFalse(any("lost its file snapshot" in s.get("text", "") for s in self.said))
+        self.until(lambda: list((self.home / "channel" / "outbox").iterdir()) == [])
+
+    def test_paused_binding_is_retried_without_consuming_or_answering(self):
+        answers = [(423, {}, {"Retry-After": "0"}), (201, {"id": "m"}, {})]
+        self.script = lambda route, body: answers.pop(0) if route == "records" else self.reply(route, body)
+        self.core.accept({"do": "deliver", "id": "p", "place": "t9", "text": "x"})
+        self.start("post")
+        self.until(lambda: self.core.cursor == 2)
+        self.assertEqual([{"say": "delivered", "id": "p", "external_id": "m"}],
+                         [s for s in self.said if s["say"] in {"delivered", "failed"}])
+
+    def test_snapshot_destination_failure_is_a_refusal_not_a_double_close(self):
+        said = self.approved()
+        into = self.home / "channel" / "outbox" / "taken" / "0"
+        into.parent.mkdir(parents=True)
+        into.write_bytes(b"")
+        with self.assertRaises(self.max.Refused):
+            self.max.a_snapshot(said, into)
+
+    def test_interrupted_download_leaves_no_partial_file(self):
+        class Cut:
+            code = 200
+
+            def __init__(self):
+                self.reads = [b"ab"]
+
+            def read(self, _amount):
+                if self.reads:
+                    return self.reads.pop()
+                raise ConnectionResetError("reset mid-body")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+        at = self.home / "channel" / "fetched" / "8.1" / "0"
+        with mock.patch.object(self.client, "open", return_value=Cut()):
+            with self.assertRaises(ConnectionResetError):
+                self.client.download("attachments/3", at, 5)
+        self.assertFalse(at.exists())
+
+    def test_run_that_is_not_two_positive_numbers_is_never_named_on_disk(self):
+        self.assertFalse(self.core.inbox({"runs": [{"run": "../../x", "attempt": 1, "text": "x",
+                                                     "attachments": [{"id": 1, "bytes": 1}]}]}))
+        self.assertEqual([], self.calls)
+        self.assertFalse((self.home / "channel" / "fetched").exists())
+
+    def test_threaded_pieces_are_numbered_so_only_the_first_can_link(self):
+        for n in range(2):
+            self.core.accept({"do": "deliver", "id": "r-%d" % n, "place": "t9", "text": "x",
+                              "reply_to": "12.1", "threaded": "report"})
+        self.assertEqual([0, 1], [row["piece"] for row in self.journal.records])
+
+    def test_seen_does_not_close_legacy_work(self):
+        self.core.accept({"do": "state", "place": "t9", "state": "working"})
+        self.core.accept({"do": "state", "place": "t9", "external_id": "1.1", "state": "seen"})
+        self.assertEqual({"legacy:t9"}, self.core.open_work)
+
 
 class SearchAndFetch(Scripted):
     def test_search_pages_to_limit_with_inclusive_days_and_maps_hits(self):
@@ -909,6 +1001,8 @@ class SearchAndFetch(Scripted):
         busy = self.max.search(self.client, {"words": "x", "limit": 5})
         self.assertTrue(busy["ok"])
         self.assertIn("busy", busy["partial"])
+        # No page answered, so nothing was measured: absent, never a zero.
+        self.assertNotIn("looked", busy)
         self.assertEqual(1, len(self.calls))
         page = {"hits": [], "before": "more", "looked": {"messages": 200}}
         self.script = lambda route, body: (200, page, {})
@@ -917,6 +1011,14 @@ class SearchAndFetch(Scripted):
         self.assertIn("50 seconds", spent["partial"])
         self.script = lambda route, body: (401, {}, {})
         self.assertFalse(self.max.search(self.client, {"words": "x"})["ok"])
+
+    def test_search_skips_hits_that_could_not_be_shown(self):
+        page = {"hits": [{"ref": "t9/2", "user": "m1", "text": "", "at": "2026-11-19T10:00:00Z"},
+                         {"ref": "t9/1", "user": "m1", "text": "kept", "at": "2026-11-19T09:00:00Z"}],
+                "before": None, "looked": {"messages": 2}}
+        self.script = lambda route, body: (200, page, {})
+        answer = self.max.search(self.client, {"words": "", "limit": 5})
+        self.assertEqual(["t9/1"], [one["ref"] for one in answer["results"]])
 
     def test_fetch_rechecks_and_lands_each_file_at_its_own_position(self):
         def reply(route, body):

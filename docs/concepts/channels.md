@@ -136,7 +136,7 @@ Inbox reads are short polls, with one outstanding request: three seconds after a
 or fresh poll, fifteen seconds when idle. A bodyless `204` is a successful heartbeat. Posting and
 stdin draining run independently, so a delayed post cannot block a steering message or Stop.
 Work has no timer that ends it. Retryable posting failures keep the same journal record and earn
-no delivery acknowledgement. Revocation (`401`) and supersession (`410`, or an allocation conflict)
+no delivery acknowledgement; `423` (a paused binding) is retried like `429`. Revocation (`401`) and supersession (`410`, or an allocation conflict)
 exit `78`.
 
 Each outbound record is fsynced before posting, then sent in sequence on a Max-allocated stream.
@@ -149,11 +149,11 @@ The [layout](layout.md#an-agent-is-a-directory-and-everything-it-has-is-inside-i
 | Parity | What the adapter does |
 |---|---|
 | Inbound files | Fetches each through `attachments/{id}` (never the described URL) into `fetched/<run>.<attempt>/<n>` and reports Max's declared size. A body of another size is not handed on: a short one retries the run, a long or refused one is left out with a note |
-| Outbound files | Re-opens every component with `O_NOFOLLOW`, snapshots the approved size and SHA-256 into `outbox/` before journalling, and refuses the whole delivery on any mismatch. Posting stages each snapshot alone through `uploads`, restaging after 20 minutes, then names the uploads in the `deliver`. A refused upload posts the record without them, so Max refuses it and the sequence still advances |
-| Notices | `notice: true` without `to` becomes one copy per allowed `m…` member, each aimed `to.sender` with id `<id>/<member>`. Rundesk hears `delivered` once a copy lands and `failed` only when none did. `to.place` is refused: the allow list names people only |
-| Child threads | `threaded` travels beside a `reply_to` naming a run attempt; any other `reply_to` is dropped with it, and the delivery stays in its place |
+| Outbound files | Re-opens every component with `O_NOFOLLOW`, snapshots the approved size and SHA-256 into `outbox/` before journalling, and refuses the whole delivery on any mismatch. Posting stages each snapshot alone through `uploads`, restaging after 20 minutes, then names the uploads in the `deliver`. A refused upload posts the record without them, so Max refuses it and the sequence still advances. A snapshot is kept until a later success proves Max applied its record, so a requested rewind can post it again |
+| Notices | `notice: true` without `to` becomes one copy per allowed `m…` member, each aimed `to.sender` with id `<id>/<member>`. Rundesk hears `delivered` once a copy lands and `failed` only when none did, including across an adapter restart; no delivery id is ever answered twice. `to.place` is refused: the allow list names people only |
+| Child threads | `threaded` travels beside a `reply_to` naming a run attempt, with each piece numbered so only the first can link the run's reply; any other `reply_to` is dropped with it, and the delivery stays in its place |
 | Delegation | Each record is journalled and posted whole; Max renders the line |
-| Search | Pages Max's newest-first search to `limit`, stopping at 50 seconds with `partial`. Days are inclusive. A scope must be `t<thread>` (a result's `external_place`) or `m<member>`; a `c<channel>` or `d` place is refused |
+| Search | Pages Max's newest-first search to `limit`, stopping at 50 seconds with `partial`. Days are inclusive. Max describes no files on a hit, so a hit without text is skipped, and `looked` is left out unless every page counted. A scope must be `t<thread>` (a result's `external_place`) or `m<member>`; a `c<channel>` or `d` place is refused |
 | Fetch | Takes a `t<thread>/<message>` ref, rechecks Max's gates, and lands up to ten files under `fetched/<message>/<n>`, naming any it could not bring in `partial` |
 
 ## Going out: cut to what the platform takes
