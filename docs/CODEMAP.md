@@ -54,15 +54,16 @@ Numbered, discovered, and **immutable once shipped** — never renumbered, renam
 agent steps run from `0001_the_records_an_agent_keeps` to
 `0014_where_one_schedule_reports`. The lifecycle registry exists and holds no shipped step yet.
 
-## Adapters (src/ — 6)
+## Adapters (src/ — 7)
 
 Executables with a shebang and no `.py`, run as separate programs exchanging newline-delimited JSON.
-Being extensionless is why a directory-scanning lint does not see them. A channel adapter answers
+Being extensionless is why a directory-scanning lint does not see them. A full channel adapter answers
 five invocations: `--capabilities`, `--check` and `serve` for the owner and the gateway, and `search`
 and `fetch` for the agent itself. One of them answers a sixth nobody else says: `src/channels/slack`
 runs itself as `upload`, because a file has a deadline and only a process can be held to one.
+The Max core currently answers the first three invocations; search and fetch follow integration.
 
-- `src/channels/` — `discord`, `slack`
+- `src/channels/` — `discord`, `slack`, `max` (core transport; parity follows integration)
 - `src/providers/` — `codex`, `claude`, `grok`, `antigravity`
 
 ## Shipped artifacts (src/ — 2 trees)
@@ -72,7 +73,7 @@ runs itself as `upload`, because a file has a deadline and only a process can be
 | `src/skills/` | the bundled `rundesk` catalog: `manifest.json` and 3 packages — `delegating-work`, `managing-rundesk`, `writing-skills` |
 | `src/templates/` | the agent home: an `AGENTS.md`/`CLAUDE.md` pair placed from one source, `MEMORY.md`, and purpose-named area templates for plans, research, retros, scripts, and tasks |
 
-## Tests (tests/ — 91 suites, 3 support modules)
+## Tests (tests/ — 92 suites, 3 support modules)
 
 Directly runnable `unittest` suites. `tests/support.py` gives every case a temporary root, asserts
 that Rundesk resolved that root before the case runs, and points the proxy variables at a closed port

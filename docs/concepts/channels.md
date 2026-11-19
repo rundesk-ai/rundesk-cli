@@ -121,6 +121,32 @@ behind that websocket and it is not the app the bot token was issued by, the ada
 agent's log and readiness is unaffected — every event would be going to the other app's connections,
 and that is a thing to be told rather than a thing this decides.
 
+## Max core transport
+
+The `max` adapter currently supports the first integration milestone: text arrivals, steering,
+commands, progress, correlated work and answers. Files, search, notices, delegation displays and
+child-thread creation follow that integration gate; it declares no attachment or search capability.
+It refuses outbound files and initiated messages explicitly and leaves inbound file runs queued.
+
+`--check --endpoint https://chat.example/channel/<tenant-uuid>` checks the binding with
+`MAX_CHANNEL_SECRET` and keeps the endpoint in settings. Only HTTPS is accepted, except literal
+loopback HTTP for isolated tests. Redirects are refused so the bearer secret stays at that endpoint.
+The allow list uses Max's `m<member-id>` sender ids; Rundesk still decides admission.
+
+Inbox reads are short polls, with one outstanding request: three seconds after a completed active
+or fresh poll, fifteen seconds when idle. A bodyless `204` is a successful heartbeat. Posting and
+stdin draining run independently, so a delayed post cannot block a steering message or Stop.
+Work has no timer that ends it. Retryable posting failures keep the same journal record and earn
+no delivery acknowledgement. Revocation (`401`) and supersession (`410`, or an allocation conflict)
+exit `78`.
+
+Each outbound record is fsynced before posting, then sent in sequence on a Max-allocated stream.
+The pending allocation nonce survives a restart. A missing record file continues at Max's cursor;
+damaged journal files are preserved in a numbered directory with a warning. Unreadable state is
+left untouched and exits with a retryable code. Rundesk's terminal `done` maps to Max's `succeeded`
+at the transport boundary, including an authoritative `ended.state`; null mark authority stays null.
+The [layout](layout.md#an-agent-is-a-directory-and-everything-it-has-is-inside-it) names the journal files.
+
 ## Going out: cut to what the platform takes
 
 **An answer is composed for the surface that will show it.** What a brain says on the way to its

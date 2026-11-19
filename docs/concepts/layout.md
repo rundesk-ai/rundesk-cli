@@ -117,6 +117,14 @@ hand. So a stray directory is not listed as an agent and cannot be operated on a
 interrupted `agents add` leaves litter rather than something wearing an agent's name and not being
 one.
 
+The Max adapter keeps its ordered outbox in `channels/max/journal/`: atomically replaced
+`stream.json` holds `{nonce, supersede, stream}` (null stream means allocation pending), and
+fsynced `records.jsonl` retains the sequenced records for retry and server-requested rewind.
+An exclusive flock on that exact directory lasts for the adapter process. These are adapter-owned
+files, independent of the agent record schema. Malformed headers or damaged record files are moved
+to `journal/damaged-<n>/` before a new allocation; unreadable files remain untouched. Neither path
+deletes the retained records. Updates do not replace them, and copies carry them with channel data.
+
 The configuration row in `state.db` also keeps this agent's outbound delegation scope as a nullable
 JSON array. `NULL` means the default, any other available agent; `[]` means none, making this agent
 inbound-only for named-agent work; and a non-empty array is the exact allowlist. The setting changes

@@ -352,6 +352,9 @@ rather than a channel quietly rewritten underneath whoever is reading it.
 What reaching proves is adapter-specific. Discord opens its gateway connection. Slack authenticates,
 validates the granted scopes, and obtains a Socket Mode URL without opening a second websocket that
 could take live events from the gateway's connection.
+Max's core adapter checks the binding's authenticated `check` endpoint. Its
+[current scope and polling guarantees](../concepts/channels.md#max-core-transport) describe the first
+integration milestone and deferred parity features.
 
 ### channels remove
 
