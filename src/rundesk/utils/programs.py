@@ -660,7 +660,7 @@ def stop(pid: int, gently_for: float, firmly_for: float = 5.0) -> str:
         return f"{pid} is in this command's own process group, and stopping it would stop this"
 
     for how, patience in ((GENTLY, gently_for), (FIRMLY, firmly_for)):
-        trouble = _signalled(group, how)
+        trouble = _signalled(group, how, pid)
         if trouble:
             return trouble
         if _gone_within(group, pid, patience):
@@ -671,13 +671,19 @@ def stop(pid: int, gently_for: float, firmly_for: float = 5.0) -> str:
     return f"{pid} and what it started were still running after being asked and then told to stop"
 
 
-def _signalled(group: int, how: int) -> str:
+def _signalled(group: int, how: int, pid: Optional[int] = None) -> str:
     """Send one signal to a whole process group. `""` when it landed or there was nobody left."""
     try:
         os.killpg(group, how)
     except ProcessLookupError:
         return ""
     except PermissionError as why:
+        # macOS can refuse a group signal while its leader is an unreaped zombie. Collect only
+        # an exited child we own, then retry once: surviving members must still be stopped, and
+        # a live leader or a second refusal must still report the permission failure.
+        if pid is not None and ready_to_collect(pid):
+            _settled(pid)
+            return _signalled(group, how)
         return f"process group {group} could not be signalled ({why})"
     return ""
 

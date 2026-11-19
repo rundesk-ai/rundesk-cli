@@ -1192,20 +1192,32 @@ class AProgramThatKeepsRunning(support.Isolated):
         self.assertFalse(programs.alive(pid))
 
     def test_a_child_that_exited_is_reaped_rather_than_left_a_zombie(self):
-        # The surprising half is asserted first, because it is the reason `stop` reaps at all: a
-        # child that has already exited is *still there* until somebody collects it, and a zombie
-        # answers signal 0 exactly like a running process. A stop that only watched would wait out
-        # its whole ceiling and then report a program still running that had exited immediately.
-        #
-        # This case caught its own predecessor: written as "wait until it is not alive", it could
-        # never come true, and it had been passing only because the condition was mistyped into one
-        # that was always true.
-        pid = self.given_running("pass")
-        self.assertTrue(programs.alive(pid))
+        # Hold the child until liveness is checked: `alive` reaps an exited child, so it cannot
+        # establish the zombie precondition. Observe that state without consuming its status.
+        readable, writable = os.pipe()
+        try:
+            pid = programs.start(
+                [sys.executable, "-c", f"import os; os.read({readable}, 1)"],
+                self.log, holding=(readable,))
+            self.started.append(pid)
+            self.assertTrue(programs.alive(pid))
+            os.write(writable, b"x")
+        finally:
+            os.close(readable)
+            os.close(writable)
+
+        self.assertTrue(support.waited_until(
+            lambda: programs.run(["ps", "-o", "stat=", "-p", str(pid)],
+                                 self.PATIENCE).out.strip().startswith("Z"),
+            self.PATIENCE), "the released child never became a zombie")
+        os.kill(pid, 0)  # A zombie still answers signal 0 until its parent collects it.
 
         self.assertEqual("", programs.stop(pid, 2.0, 1.0),
                          "a program that has already gone is the state that was asked for")
 
+        # Ask before `alive`, or that call could hide a stop that left the child unreaped.
+        with self.assertRaises(ChildProcessError, msg="stop left the child waitable"):
+            os.waitpid(pid, os.WNOHANG)
         self.assertFalse(programs.alive(pid), "it was left in the table")
 
     def test_a_survivor_in_the_group_is_not_a_clean_stop(self):
@@ -1231,6 +1243,57 @@ class AProgramThatKeepsRunning(support.Isolated):
         # Nothing may be left in the group once this has said it stopped.
         with self.assertRaises(ProcessLookupError):
             os.killpg(pid, 0)
+
+    def test_a_refused_signal_after_leader_exit_still_stops_the_surviving_group(self):
+        ready = self.home / "the-survivor-is-ready"
+        pid = self.given_running(
+            "import subprocess, sys, pathlib, time, os\n"
+            "subprocess.Popen([sys.executable, '-c',\n"
+            "  \"import signal, time, pathlib;\"\n"
+            "  \"signal.signal(signal.SIGTERM, signal.SIG_IGN);\"\n"
+            f"  \"pathlib.Path({str(ready)!r}).write_text('ready');\"\n"
+            "  \"time.sleep(60)\"])\n"
+            f"while not pathlib.Path({str(ready)!r}).exists(): time.sleep(0.01)\n"
+            "os._exit(7)\n")
+        self.assertTrue(support.waited_until(
+            lambda: programs.run(["ps", "-o", "stat=", "-p", str(pid)],
+                                 self.PATIENCE).out.strip().startswith("Z"),
+            self.PATIENCE), "the leader never exited")
+        killpg = os.killpg
+        signals = []
+
+        def signalling(group, how):
+            signals.append(how)
+            if len(signals) == 1:
+                raise PermissionError("unreaped leader")
+            return killpg(group, how)
+
+        with mock.patch.object(programs.os, "killpg", side_effect=signalling):
+            self.assertEqual("", programs.stop(pid, 0.3, 3.0))
+
+        self.assertEqual([programs.GENTLY, programs.GENTLY], signals[:2])
+        self.assertIn(programs.FIRMLY, signals, "the survivor was never told to stop")
+        with self.assertRaises(ChildProcessError, msg="stop left the leader waitable"):
+            os.waitpid(pid, os.WNOHANG)
+        with self.assertRaises(ProcessLookupError, msg="stop abandoned the surviving group"):
+            killpg(pid, 0)
+
+    def test_a_genuine_signal_refusal_is_reported_with_a_live_or_collected_leader(self):
+        for exited in (False, True):
+            with self.subTest(exited=exited):
+                pid = self.given_running("pass" if exited else "import time; time.sleep(60)")
+                if exited:
+                    self.assertTrue(support.waited_until(
+                        lambda: programs.ready_to_collect(pid), self.PATIENCE))
+                with mock.patch.object(programs.os, "killpg",
+                                       side_effect=PermissionError("genuine refusal")) as sending:
+                    why = programs.stop(pid, 0.3, 1.0)
+                self.assertIn("could not be signalled", why)
+                self.assertIn("genuine refusal", why)
+                self.assertEqual(2 if exited else 1, sending.call_count,
+                                 "only an exited leader earns one retry")
+                if not exited:
+                    self.assertTrue(programs.alive(pid), "a refused stop killed the leader")
 
     def test_a_child_that_exited_on_its_own_stops_reading_as_alive(self):
         # Without collecting it, `alive` answers True for ever: a zombie answers signal 0 exactly
