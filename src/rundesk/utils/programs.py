@@ -678,11 +678,10 @@ def _signalled(group: int, how: int, pid: Optional[int] = None) -> str:
     except ProcessLookupError:
         return ""
     except PermissionError as why:
-        # macOS can refuse a group signal while its leader is an unreaped zombie. Collect only
-        # an exited child we own, then retry once: surviving members must still be stopped, and
-        # a live leader or a second refusal must still report the permission failure.
+        # macOS can refuse a group signal while its leader is an unreaped zombie. Polling reaps
+        # an exited child we own but retains its status if the one retry also refuses. Surviving
+        # members must still be stopped; a live leader or second refusal is a permission failure.
         if pid is not None and ready_to_collect(pid):
-            _settled(pid)
             return _signalled(group, how)
         return f"process group {group} could not be signalled ({why})"
     return ""

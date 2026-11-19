@@ -1281,7 +1281,8 @@ class AProgramThatKeepsRunning(support.Isolated):
     def test_a_genuine_signal_refusal_is_reported_with_a_live_or_collected_leader(self):
         for exited in (False, True):
             with self.subTest(exited=exited):
-                pid = self.given_running("pass" if exited else "import time; time.sleep(60)")
+                pid = self.given_running(
+                    "raise SystemExit(78)" if exited else "import time; time.sleep(60)")
                 if exited:
                     self.assertTrue(support.waited_until(
                         lambda pid=pid: programs.ready_to_collect(pid), self.PATIENCE))
@@ -1294,6 +1295,9 @@ class AProgramThatKeepsRunning(support.Isolated):
                                  "only an exited leader earns one retry")
                 if not exited:
                     self.assertTrue(programs.alive(pid), "a refused stop killed the leader")
+                else:
+                    self.assertEqual(programs.Collected(True, 78), programs.collected(pid),
+                                     "a refused stop consumed the child's terminal status")
 
     def test_a_child_that_exited_on_its_own_stops_reading_as_alive(self):
         # Without collecting it, `alive` answers True for ever: a zombie answers signal 0 exactly
