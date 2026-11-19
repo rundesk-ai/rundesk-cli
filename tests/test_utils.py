@@ -1284,7 +1284,7 @@ class AProgramThatKeepsRunning(support.Isolated):
                 pid = self.given_running("pass" if exited else "import time; time.sleep(60)")
                 if exited:
                     self.assertTrue(support.waited_until(
-                        lambda: programs.ready_to_collect(pid), self.PATIENCE))
+                        lambda pid=pid: programs.ready_to_collect(pid), self.PATIENCE))
                 with mock.patch.object(programs.os, "killpg",
                                        side_effect=PermissionError("genuine refusal")) as sending:
                     why = programs.stop(pid, 0.3, 1.0)
