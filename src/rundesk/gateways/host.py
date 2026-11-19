@@ -632,6 +632,7 @@ def _serving(name: str, at: Path, held: contextlib.ExitStack,
         watching = firing.settled(name, where)
         channels_up = hosting.settled(name, where, answering=on_a_channel)
         handed = delegations.settled(name, where)
+        answering.inherited_work(name)
         with contextlib.suppress(Exception):
             turns.settle_abandoned(name)
         # Registered on the stack `run` unwinds however this process leaves, which is the one place

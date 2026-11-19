@@ -448,6 +448,12 @@ class Running(NamedTuple):
     #: gateway loop can replace a live but unreachable adapter without confusing a short reconnect
     #: with a failure.
     disconnected_at: Optional[float] = None
+    #: Ready/loop only signal these. Snapshot sampling never runs on the stdout reader.
+    snapshot_requested: Optional[threading.Event] = None
+    snapshot_forced: Optional[threading.Event] = None
+    snapshot_stopped: Optional[threading.Event] = None
+    snapshotting: Optional[threading.Thread] = None
+    snapshot_lock: Optional[threading.Lock] = None
 
 
 class Watching(NamedTuple):
@@ -619,6 +625,9 @@ def looked(agent: str, where: Path, watching: Watching,
     if answering is not None:
         with contextlib.suppress(Exception):
             _answered_pending(agent, watching, answering)
+    for one in list(watching.running.values()):
+        if one.snapshot_requested is not None and one.connected is not None and one.connected.is_set():
+            one.snapshot_requested.set()
     return watching
 
 
@@ -675,7 +684,8 @@ def stopping(agent: str, where: Path, watching: Watching, within: float) -> Watc
 
 
 def marked(agent: str, where: Path, watching: Watching, kind: str, place: str,
-           state: str, external_id: Optional[str] = None) -> bool:
+           state: str, external_id: Optional[str] = None,
+           work: Optional[str] = None, work_for: Optional[str] = None) -> bool:
     """Tell a channel what a turn is doing. `False` when nothing was reading that adapter.
 
     **This module owns the wire and never the word.** `seen` is its own — a message arriving is the
@@ -691,10 +701,19 @@ def marked(agent: str, where: Path, watching: Watching, kind: str, place: str,
     said = {"do": "state", "place": place, "state": state}
     if external_id:
         said["external_id"] = external_id
+    if work is not None:
+        said["work"] = work
+        if work_for is not None:
+            said["for"] = work_for
     with contextlib.suppress(Exception):
         _said_to(where, one, said)
         return True
     return False
+
+
+def work_record(where: Path, one: Running, record: Dict[str, Any]) -> bool:
+    """Carry provider-owned work facts under the adapter's ordinary write lock."""
+    return _said_to(where, one, dict(record, do="work"))
 
 
 def doing(agent: str, where: Path, watching: Watching, kind: str, place: str,
@@ -1171,6 +1190,8 @@ def _started(agent: str, where: Path, kind: str, watching: Watching,
         watching.waiting[kind] = time.monotonic()
         return
 
+    supports_work = getattr(answering, "work_supported", None)
+    snapshots = supports_work is not None and supports_work(agent, kind)
     with claiming(agent, kind) as held:
         errors = errors_of(agent, kind)
         errors.parent.mkdir(parents=True, exist_ok=True)
@@ -1198,15 +1219,47 @@ def _started(agent: str, where: Path, kind: str, watching: Watching,
                   talking=talking,
                   listening=None, connected=threading.Event(),
                   since=time.monotonic(), mine=True, saying=threading.Lock(), awaiting={},
-                  posted={}, refused={})
+                  posted={}, refused={},
+                  snapshot_requested=threading.Event() if snapshots else None,
+                  snapshot_forced=threading.Event() if snapshots else None,
+                  snapshot_stopped=threading.Event() if snapshots else None,
+                  snapshot_lock=threading.Lock() if snapshots else None)
     # Put the record in place before the reader starts. An adapter may say `ready` immediately,
     # and the reader must be able to clear a prior disconnect hold against the record it represents.
     watching.running[kind] = one
     listening = threading.Thread(target=_listened, name=f"channel-{kind}",
                                  args=(agent, where, one, row, watching), daemon=True)
-    watching.running[kind] = one._replace(listening=listening)
+    snapshotting = (threading.Thread(target=_snapshots, name=f"work-{kind}",
+                                    args=(agent, where, one), daemon=True) if snapshots else None)
+    watching.running[kind] = one._replace(listening=listening, snapshotting=snapshotting)
+    if snapshotting is not None:
+        snapshotting.start()
     listening.start()
     _note(where, f"channel {kind}: started as pid {talking.pid}")
+
+
+def _snapshots(agent: str, where: Path, one: Running) -> None:
+    """Own snapshot sampling away from the reader that must keep draining the other pipe."""
+    snapshot = getattr(one.answering, "snapshot", None)
+    if snapshot is None:
+        return
+    previous = None
+    while not one.snapshot_stopped.is_set():
+        one.snapshot_requested.wait()
+        one.snapshot_requested.clear()
+        if one.snapshot_stopped.is_set():
+            return
+        holding = one.snapshot_lock if one.snapshot_lock is not None else contextlib.nullcontext()
+        with holding:
+            force = one.snapshot_forced.is_set()
+            one.snapshot_forced.clear()
+        try:
+            previous = snapshot(agent, one.kind, one, previous, force)
+        except Exception as why:  # noqa: BLE001 — a surface cannot end its gateway
+            _note(where, f"channel {one.kind}: work snapshot could not be sent ({why})", logs.WARNING)
+            # Preserve a forced ready snapshot across a transient read or write failure.
+            if force:
+                one.snapshot_forced.set()
 
 
 def _listened(agent: str, where: Path, one: Running, row: Dict[str, Any],
@@ -1264,6 +1317,10 @@ def _listened(agent: str, where: Path, one: Running, row: Dict[str, Any],
     except Exception as why:                           # noqa: BLE001 — see the module docstring
         with contextlib.suppress(Exception):
             _note(where, f"channel {kind}: this gateway stopped listening to it ({why})", logs.ERROR)
+    finally:
+        if one.snapshot_stopped is not None:
+            one.snapshot_stopped.set()
+            one.snapshot_requested.set()
 
 
 def _heard(agent: str, where: Path, one: Running, line: str, admitting: kept.Admitting,
@@ -1287,6 +1344,11 @@ def _heard(agent: str, where: Path, one: Running, line: str, admitting: kept.Adm
     elif saying == "ready":
         if one.connected is not None:
             one.connected.set()
+        if one.snapshot_requested is not None:
+            holding = one.snapshot_lock if one.snapshot_lock is not None else contextlib.nullcontext()
+            with holding:
+                one.snapshot_forced.set()
+                one.snapshot_requested.set()
         if watching is not None:
             current = watching.running.get(kind)
             if current is not None and current.pid == one.pid:
@@ -1889,10 +1951,15 @@ def _said_to(where: Path, one: Running, record: Dict[str, Any]) -> bool:
 
 def _let_go(agent: str, where: Path, one: Running, watching: Watching) -> None:
     """Close what this process holds for an adapter that is over, and hold off the next start."""
+    if one.snapshot_stopped is not None:
+        one.snapshot_stopped.set()
+        one.snapshot_requested.set()
     if one.talking is not None:
         for end in (one.talking.stdout, one.talking.stdin):
             with contextlib.suppress(Exception):
                 end.close()
+    if one.snapshotting is not None:
+        one.snapshotting.join()
     with contextlib.suppress(OSError):
         files.remove_one(record_of(agent, one.kind))
     watching.running.pop(one.kind, None)

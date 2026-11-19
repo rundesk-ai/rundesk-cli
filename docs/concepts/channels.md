@@ -108,6 +108,12 @@ appears only once it has said enough. The gateway's loop sleeps fifteen seconds 
 draining on the loop *is* that bug. The thread reads lines and records them; the loop asks only
 whether the child is alive, starts one that is not, and stops them all at the end.
 
+An adapter declaring `work` also receives correlated producer endings and recoverable snapshots.
+A separate snapshot worker keeps sampling away from the stdout reader. It reports this gateway's
+open producers and the unfinished turns inherited at startup, using conversation-level claim
+activity without guessing which older turn another process owns. The wire and its limits are in
+[`../extending/adapters.md`](../extending/adapters.md#recovering-correlated-work).
+
 `STANDING` in a listing is asked of the kernel through that claim, exactly as `rundesk gateways` asks
 about a gateway. `connected` means the adapter earned the readiness signal it reports; for Slack,
 that requires Slack's `hello`, not merely a locally opened websocket. Where Slack names the app

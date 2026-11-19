@@ -31,10 +31,12 @@ The answer goes back through what already exists: cut to the platform's own limi
 
 import contextlib
 import datetime
+import itertools
 import json
 import stat
 import threading
 import time
+import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -190,6 +192,119 @@ BEFORE_ASKING_AGAIN = 0.25
 REVIEW_ADMITTED_WITHIN = 2.0
 
 
+# Work is process-local: durable turn rows remain the authority after a gateway dies.
+_gateway = uuid.uuid4().hex
+_work_serial = itertools.count().__next__
+_work_guard = threading.Lock()
+_work_locks: Dict[Tuple[Path, str], Any] = {}
+_open_work: Dict[Tuple[Path, str], Dict[str, Dict[str, Any]]] = {}
+_inherited: Dict[Path, set] = {}
+_work_capabilities: Dict[Tuple[Path, str], bool] = {}
+WORK_AT_MOST = 200
+
+
+def _work_key(agent: str, kind: str) -> Tuple[Path, str]:
+    return directory.records(agent), kind
+
+
+def _work_lock(agent: str, kind: str) -> Any:
+    with _work_guard:
+        return _work_locks.setdefault(_work_key(agent, kind), threading.Lock())
+
+
+def _shows_work(agent: str, kind: str) -> bool:
+    key = _work_key(agent, kind)
+    if key in _work_capabilities:
+        return _work_capabilities[key]
+    with _work_lock(agent, kind):
+        if key not in _work_capabilities:
+            declared = False
+            with contextlib.suppress(Exception):
+                declared = channels_adapters.capabilities(kind).get("work") is True
+            _work_capabilities[key] = declared
+        return _work_capabilities[key]
+
+
+def inherited_work(agent: str) -> None:
+    """Capture once, before producers or abandoned-turn settlement can change the rows."""
+    _inherited[directory.records(agent)] = {
+        row["id"] for row in kept.list_unfinished_turns(agent)}
+
+
+def _inherited_work(agent: str, kind: str) -> List[Dict[str, Any]]:
+    inherited = _inherited.get(directory.records(agent), set())
+    grouped: Dict[int, Dict[str, Any]] = {}
+    with records.reading(directory.records(agent)) as conn:
+        rows = conn.execute(
+            "SELECT t.id, t.conversation_id, t.created_at, c.source_id,"
+            " (SELECT m.external_id FROM conversation_messages m WHERE m.turn_id = t.id"
+            " AND m.author = 'user' AND m.external_id IS NOT NULL ORDER BY m.id LIMIT 1) AS message"
+            " FROM turns t JOIN conversations c ON c.id = t.conversation_id"
+            " WHERE t.turn_status = ? AND c.source = ? AND c.channel = ? ORDER BY t.id",
+            (kept.WORKING, arriving.FROM_CHANNEL, kind)).fetchall()
+    for row in rows:
+        conversation = row["conversation_id"]
+        if row["id"] not in inherited:
+            continue
+        if conversation not in grouped:
+            if turns.running_here(agent, conversation):
+                activity = "here"
+            else:
+                held = turns.standing(agent, conversation)
+                activity = "free" if held is False else "elsewhere" if held is True else "unknown"
+            grouped[conversation] = {"place": row["source_id"], "activity": activity, "turns": []}
+        grouped[conversation]["turns"].append({
+            "turn": row["id"], "for": row["message"], "began": row["created_at"]})
+    return list(grouped.values())
+
+
+class _Work:
+    """Linearize first WORKING, ended/removal and snapshots: registry L always precedes pipe A."""
+
+    def __init__(self, owner: "IntoAChannel", agent: str, kind: str, place: str,
+                 external_id: Optional[str] = None) -> None:
+        self.owner = owner
+        self.agent = agent
+        self.kind = kind
+        self.key = _work_key(agent, kind)
+        self.work = f"{_gateway}:{_work_serial()}"
+        self.metadata = {"work": self.work, "place": place, "for": external_id,
+                         "began": config.moment_of()}
+        self.started = False
+        self.how = "pending"
+        self.marked: Optional[str] = None
+        self.state: Optional[str] = None
+
+    def start(self) -> bool:
+        with _work_lock(self.agent, self.kind):
+            if not self.started:
+                _open_work.setdefault(self.key, {})[self.work] = self.metadata
+                self.started = True
+            return self.mark(WORKING)
+
+    def mark(self, state: str, external_id: Optional[str] = None) -> bool:
+        if state != WORKING and external_id:
+            self.marked, self.state = external_id, state
+        return hosting.marked(
+            self.agent, self.owner._where, self.owner._hosted(), self.kind,
+            self.metadata["place"], state, external_id, work=self.work,
+            work_for=self.metadata["for"])
+
+    def end(self) -> None:
+        if not self.started:
+            return
+        shows_work = _shows_work(self.agent, self.kind)
+        with _work_lock(self.agent, self.kind):
+            try:
+                one = self.owner._hosted().running.get(self.kind)
+                if shows_work and one is not None:
+                    hosting.work_record(self.owner._where, one, dict(
+                        self.metadata, ended=self.how, marked=self.marked, state=self.state))
+            finally:
+                _open_work[self.key].pop(self.work, None)
+                self.started = False
+
+
 class Refused(Exception):
     """A schedule that asks nobody anything, asked to take a turn.
 
@@ -261,6 +376,35 @@ class IntoAChannel:
     def hosted(self) -> hosting.Watching:
         """What the gateway is watching **now** — asked again every time, never held."""
         return self._hosted()
+
+    def work_supported(self, agent: str, kind: str) -> bool:
+        """Resolve capabilities before a child/worker exists, keeping worker shutdown bounded."""
+        return _shows_work(agent, kind)
+
+    def snapshot(self, agent: str, kind: str, one: hosting.Running,
+                 previous: Optional[List[Dict[str, Any]]], force: bool
+                 ) -> Optional[List[Dict[str, Any]]]:
+        """Sample and write under L; called only by the adapter's separate snapshot worker."""
+        if not _shows_work(agent, kind):
+            return previous
+        with _work_lock(agent, kind):
+            inherited = _inherited_work(agent, kind)
+            if not force and inherited == previous:
+                return previous
+            opened = list(_open_work.get(_work_key(agent, kind), {}).values())
+            count = len(opened) + sum(len(group["turns"]) for group in inherited)
+            available = WORK_AT_MOST - min(len(opened), WORK_AT_MOST)
+            bounded = []
+            for group in inherited:
+                members = group["turns"][:available]
+                if members:
+                    bounded.append(dict(group, turns=members))
+                available -= len(members)
+            if hosting.work_record(self._where, one, {
+                    "gateway": _gateway, "open": opened[:WORK_AT_MOST],
+                    "inherited": bounded, "truncated": count > WORK_AT_MOST}):
+                return inherited
+            raise OSError("the adapter could not be given its work snapshot")
 
     def remark(self, agent: str, kind: str, place: str, said: str) -> None:
         """One finished thing the agent said mid-turn, posted on its own (R-CH-19).
@@ -504,10 +648,11 @@ class OnAChannel(IntoAChannel):
         ended goes on *that* message rather than nowhere (R-DIS-7). Both were built and neither
         fired, because this thread was started without it and every layer below defaulted it away.
         """
+        work = _Work(self, agent, kind, place, external_id)
         try:
             for again in range(TRIES):
                 try:
-                    self._marked(agent, kind, place, WORKING)
+                    work.start()
                     watching = _Streaming(self, agent, kind, place)
                     got = turns.run(turns.Request(
                         agent=agent, prompt=body, conversation=landed.conversation,
@@ -531,7 +676,8 @@ class OnAChannel(IntoAChannel):
                         _note(self._where, f"channel {kind}: the answer to {place} was not "
                                            f"delivered — {refused}", logs.ERROR)
                         became = FAILED
-                    self._marked(agent, kind, place, became, external_id)
+                    work.mark(became, external_id)
+                    work.how = "answered"
                     return
                 except turns.Busy:
                     admission = turns.Admission()
@@ -544,6 +690,7 @@ class OnAChannel(IntoAChannel):
                         # answers both, which is what somebody adding to their own question means.
                         _note(self._where, f"channel {kind}: {place} is being answered, so this "
                                            "was said into the turn already running")
+                        work.how = "joined"
                         return
                     # **Nobody took it, and that is not the same as nothing to do.** Either this
                     # brain reads nothing after its prompt, or the turn settled in the moment
@@ -571,12 +718,15 @@ class OnAChannel(IntoAChannel):
             # turn it is waiting for had settled. Left alone where this gateway is already running a
             # turn in the same conversation, because that turn owns the indicator and ends it itself.
             if not turns.running_here(agent, landed.conversation):
-                self._marked(agent, kind, place, FAILED)
+                work.mark(FAILED)
         except Exception as why:                       # noqa: BLE001 — see the docstring
+            work.how = "failed"
             _note(self._where, f"channel {kind}: answering {place} went wrong ({why})", logs.ERROR)
             self._do_not_repeat_pending(agent, landed.message)
             with contextlib.suppress(Exception):
-                self._marked(agent, kind, place, FAILED, external_id)
+                work.mark(FAILED, external_id)
+        finally:
+            work.end()
 
     def _marked(self, agent: str, kind: str, place: str, state: str,
                 external_id: Optional[str] = None) -> None:
@@ -1330,23 +1480,20 @@ class OnADelegation(IntoAChannel):
         # turn aimed at one keeps the quiet every scheduled run already keeps, and the answer is the
         # only thing that reaches a person. `showed` refuses the same records for the same reason.
         showing = kind if aimed is None else None
+        work = _Work(self, agent, showing or "", delivery_place)
         try:
             for again in range(TRIES):
                 try:
                     watching = (_Streaming(self, agent, showing, delivery_place)
                                 if showing else None)
-                    typing_started = False
                     got = None
 
                     def started() -> None:
-                        nonlocal typing_started
                         # Delegation and review turns have no new platform message to trigger the
                         # ordinary channel path. Admission is the exact moment they become real
                         # work, so a channel-backed conversation must start typing here as well.
                         if showing:
-                            typing_started = hosting.marked(
-                                agent, self._where, self._hosted(), showing, delivery_place,
-                                WORKING)
+                            work.start()
                         if admitted is not None:
                             admitted.accepted()
 
@@ -1364,17 +1511,17 @@ class OnADelegation(IntoAChannel):
                                       if watching and source == arriving.FROM_CHANNEL else None),
                             admitted=started)
                     finally:
-                        if showing and typing_started:
+                        if showing and work.started:
                             became = (AS_A_STATE.get(got.turn_status, FAILED)
                                       if got is not None else FAILED)
                             # No external id: this terminal state ends the place-wide typing
                             # indicator but puts no reaction on a message nobody sent.
-                            hosting.marked(
-                                agent, self._where, self._hosted(), showing, delivery_place, became)
+                            work.mark(became)
                     if kind:
                         self._out_loud(
                             agent, kind, delivery_place, got, watching, about,
                             notice=source == arriving.FROM_SCHEDULE, aimed=aimed)
+                    work.how = "answered"
                     return True
                 except turns.Busy:
                     said_into = turns.Admission()
@@ -1385,6 +1532,7 @@ class OnADelegation(IntoAChannel):
                         if admitted is not None:
                             admitted.accepted()
                         _note(self._where, f"{about} reached the turn already running")
+                        work.how = "joined"
                         return True
                     if again + 1 < TRIES:
                         time.sleep(BEFORE_ASKING_AGAIN)
@@ -1394,10 +1542,13 @@ class OnADelegation(IntoAChannel):
                 admitted.refused()
             return False
         except Exception as why:  # noqa: BLE001 — a thread, and nobody is above it
+            work.how = "failed"
             _note(self._where, f"{about} went wrong ({why})", logs.ERROR)
             if admitted is not None:
                 admitted.refused()
             return False
+        finally:
+            work.end()
 
     @staticmethod
     def _destination(agent: str, conversation: int) -> Optional[delivery.Telling]:
@@ -1483,6 +1634,7 @@ class OnAContinuation(IntoAChannel):
 
     def _resumed(self, agent: str, handoff: int) -> None:
         key = (agent, handoff)
+        work = None
         try:
             row = continuations.one(agent, handoff)
             stands = arriving.where_it_stands(agent, row.conversation)
@@ -1492,17 +1644,15 @@ class OnAContinuation(IntoAChannel):
                     agent, handoff, "the originating channel conversation is no longer available")
                 return
             _source, place = stands
+            work = _Work(self, agent, kind, place)
             watching = _Streaming(self, agent, kind, place)
-            typing_started = False
             got = None
 
             def started() -> None:
-                nonlocal typing_started
                 # A replacement adapter has no memory of the originating turn's indicator.
                 # Admission is the first point at which this continuation is real work, so replay
                 # the same state pair every other channel-backed turn owns from that boundary.
-                typing_started = hosting.marked(
-                    agent, self._where, self._hosted(), kind, place, WORKING)
+                work.start()
 
             try:
                 got = turns.run_if(
@@ -1520,11 +1670,10 @@ class OnAContinuation(IntoAChannel):
                     admitting=lambda: continuations.claim(agent, handoff) is not None,
                     watching=watching.heard, admitted=started)
             finally:
-                if typing_started:
+                if work.started:
                     became = (AS_A_STATE.get(got.turn_status, FAILED)
                               if got is not None else FAILED)
-                    hosting.marked(
-                        agent, self._where, self._hosted(), kind, place, became)
+                    work.mark(became)
             if got is None:
                 return
             refused = self._delivered(
@@ -1533,16 +1682,21 @@ class OnAContinuation(IntoAChannel):
             if refused:
                 outcome += f"; channel delivery was refused ({refused})"
             continuations.delivered(agent, handoff, outcome)
+            work.how = "answered"
         except turns.Busy:
             # A newer owner turn won admission. Its durable turn/message makes the next claim
             # suppress this handoff; leave it requested for that exact recheck on the next beat.
             return
         except Exception as why:  # noqa: BLE001 — a daemon worker, and nobody is above it
+            if work is not None:
+                work.how = "failed"
             with contextlib.suppress(Exception):
                 continuations.suppressed(
                     agent, handoff, f"the continuation turn could not start ({why})")
             _note(self._where, f"lifecycle continuation {handoff} went wrong ({why})", logs.ERROR)
         finally:
+            if work is not None:
+                work.end()
             with self._starting_lock:
                 self._starting.discard(key)
 

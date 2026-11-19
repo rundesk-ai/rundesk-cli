@@ -237,6 +237,11 @@ trying to start it. The last is what `channels show` and `channels doctor` read 
 that was given up on from one whose gateway is simply not running, and it is removed the moment
 something starts that channel again.
 
+Correlated channel work is process-local in the provider layer. Registration, ended/removal and
+snapshot sampling share one in-memory registry lock per agent/channel, always acquired before the
+adapter's pipe-write lock. No registry file or migration is needed; after a gateway restart,
+inherited unfinished work is read from the existing turn and conversation-message rows.
+
 It is one of the two directories a migration does not copy aside and put back, along with `logs/`:
 both grow without bound, and putting a lock file back underneath a child that is still running would
 be putting back a claim that has moved on.
