@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -1127,6 +1128,54 @@ class SearchAndFetch(Scripted):
         self.assertEqual(0, out.returncode, out.stderr)
         self.assertEqual({"ok": True, "results": [], "partial": "", "looked": {"messages": 0}},
                          json.loads(out.stdout))
+
+
+class AdapterKillPoint(Scripted):
+    """The adapter's F5 point: inert unless `RUNDESK_TEST_KILL_AT` names it, and then only once."""
+
+    def setUp(self):
+        super().setUp()
+        self.run = {"runs": [{"run": 7, "attempt": 1, "conversation": "t1", "user": "m1", "text": "x"}]}
+        self.marker = self.core.home / "test-kill-adapter-after-claim.fired"
+        os.environ.pop(self.max.KILL_AT, None)
+
+    def arrivals(self):
+        return [one for one in self.said if one.get("say") == "arrived"]
+
+    def test_unset_or_another_point_hands_the_claimed_run_on(self):
+        for value in (None, "", "gateway-after-record"):
+            with self.subTest(value=value), mock.patch("os.kill") as kill:
+                if value is not None:
+                    os.environ[self.max.KILL_AT] = value
+                self.core.pending.clear()
+                self.assertTrue(self.core.inbox(self.run))
+                kill.assert_not_called()
+                self.assertFalse(self.marker.exists())
+        self.assertEqual(3, len(self.arrivals()))
+
+    def test_named_point_kills_after_the_claim_and_before_rundesk_hears_once(self):
+        def killed(pid, sent):
+            self.assertEqual((os.getpid(), signal.SIGKILL), (pid, sent))
+            self.assertTrue(self.marker.exists())
+            self.assertEqual(["claim"], [call[0] for call in self.calls])
+            self.assertEqual([], self.arrivals())
+            raise SystemExit("killed")
+
+        os.environ[self.max.KILL_AT] = self.max.AFTER_CLAIM
+        with mock.patch("os.kill", side_effect=killed) as kill:
+            with self.assertRaises(SystemExit):
+                self.core.inbox(self.run)
+            self.assertTrue(self.core.inbox(self.run))
+        self.assertEqual(1, kill.call_count)
+        self.assertEqual(["7.1"], [one["receipt"] for one in self.arrivals()])
+
+    def test_a_refused_claim_never_fires_the_point(self):
+        self.script = lambda route, body: (409, {}, {})
+        os.environ[self.max.KILL_AT] = self.max.AFTER_CLAIM
+        with mock.patch("os.kill") as kill:
+            self.assertFalse(self.core.inbox(self.run))
+        kill.assert_not_called()
+        self.assertFalse(self.marker.exists())
 
 
 if __name__ == "__main__":

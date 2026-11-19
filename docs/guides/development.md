@@ -167,6 +167,21 @@ class WhatItShouldDo(support.Isolated):
 `self.home` is the scratch root; `self.rundesk(...)` drives the command and hands back
 `(exit code, stdout, stderr)`.
 
+### Test-only kill points
+
+`RUNDESK_TEST_KILL_AT` exists for end-to-end failure runs and nothing else. Unset, empty, or any other
+value, nothing happens. A gateway started with it set hands it to its adapters, alone of its own
+environment.
+
+| Value | Where the process SIGKILLs itself |
+|---|---|
+| `gateway-after-record` | the gateway, after a fresh message is recorded and its receipt said, before a turn starts |
+| `adapter-after-claim` | the `max` adapter, after Max accepts a claim, before the message reaches Rundesk |
+
+Each point first creates `channels/<kind>/test-kill-<value>.fired` exclusively, then kills. It
+stays inert while that marker exists, so a restarted process carries on, and it stays inert if the
+marker cannot be made. Set it only on a disposable `RUNDESK_HOME`.
+
 ## A test is unproven until you have watched it fail
 
 Break the code, run the suite, see red, put the code back. A green test that would stay green with

@@ -82,6 +82,7 @@ import fcntl
 import itertools
 import json
 import os
+import signal
 import threading
 import time
 from pathlib import Path
@@ -111,6 +112,13 @@ ERRORS = "stderr.log"
 #: gateway's opinion of an adapter, it is worthless the moment one starts, and `_started` removes it
 #: for exactly that reason.
 WILL_NOT_START = "will-not-start.json"
+
+#: **Test only.** Names one deterministic SIGKILL point for an end-to-end failure run (the Max
+#: contract's §20 F4 and F5), and is inert unless set. Handed on to an adapter alone of everything
+#: in this process's environment, because the adapter half of the pair is a point inside it.
+KILL_AT = "RUNDESK_TEST_KILL_AT"
+#: The gateway's own point: after a fresh message is recorded and its receipt said, before a turn.
+AFTER_RECORD = "gateway-after-record"
 
 #: When an adapter's error file is worth moving aside, and how many are kept. The same shape and the
 #: same reasoning as everywhere else: a channel that reconnects noisily for a week must not be able
@@ -1565,6 +1573,7 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any],
         # to the message and an adapter that has just restarted no longer knows it put one up — but
         # answering it twice would be two turns for one question.
         return
+    _killed_for_a_test(at(agent, kind), AFTER_RECORD)
     if one.answering is None:
         # Nothing runs a turn here. Said plainly rather than left to look like something went wrong:
         # a gateway that receives and cannot reply has to say which it is.
@@ -1574,6 +1583,23 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any],
     # **Handed on, never run here.** This is the thread reading one adapter's output, and a turn
     # takes minutes — see `Answering`.
     one.answering.answer(agent, kind, place, who, body, external, landed)
+
+
+def _killed_for_a_test(channel: Path, point: str) -> None:
+    """**Test only:** end this process by SIGKILL at `point`, once, when `KILL_AT` names it.
+
+    The marker `test-kill-<point>.fired` beside the channel's lock is created exclusively first, so
+    a restarted gateway never kills again and a runner can see the point fired. A marker that cannot
+    be made leaves the point inert rather than killing a process nothing will notice ended.
+    """
+    if os.environ.get(KILL_AT, "") != point:
+        return
+    try:
+        os.close(os.open(str(channel / f"test-kill-{point}.fired"),
+                         os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+    except OSError:
+        return
+    os.kill(os.getpid(), signal.SIGKILL)
 
 
 def _received(where: Path, one: Running, record: Dict[str, Any], outcome: str) -> None:
@@ -2045,6 +2071,8 @@ def _the_environment(agent: str, kind: str, row: Dict[str, Any]) -> Dict[str, st
         "RUNDESK_ALLOW_PLACES": ",".join(admitting.places),
     }
     built.update(credentials.handed(agent, _named_secrets(row)))
+    if os.environ.get(KILL_AT):
+        built[KILL_AT] = os.environ[KILL_AT]
     return built
 
 

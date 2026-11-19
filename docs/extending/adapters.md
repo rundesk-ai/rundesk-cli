@@ -252,6 +252,7 @@ two credentials is still an adapter that declares two names.
 | `RUNDESK_ALLOW` | which **senders** may reach this agent here, comma separated |
 | `RUNDESK_ALLOW_PLACES` | which **places** anybody may reach it from, comma separated. Empty, or absent, where none was named |
 | each name from `secret.env` | its value, out of the install's sealed store — kept under `<NAME>__<AGENT>` and nowhere else, and always handed over as `<NAME>`. A name nothing is kept under is left out rather than set empty, and a plain `<NAME>` is never read |
+| `RUNDESK_TEST_KILL_AT` | **test only**, and absent unless the gateway itself was started with it set and non-empty. See [Test-only kill points](../guides/development.md#test-only-kill-points); an adapter with no point of its own ignores it |
 
 **stdin** is a pipe and is readable: records come in, one JSON object per line. **stdout** is a pipe
 and is drained continuously by a thread of the gateway's — records go out the same way. **stderr** is

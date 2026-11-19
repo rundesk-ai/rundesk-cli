@@ -2,6 +2,8 @@
 
 import io
 import json
+import os
+import signal
 import threading
 import unittest
 from types import SimpleNamespace
@@ -12,7 +14,8 @@ from rundesk.agents import directory
 from rundesk.channels import arriving, hosting, kept
 
 
-class RecordingReceipts(support.Isolated):
+class ReceivingOnAChannel(support.Isolated):
+    """One hosted channel whose adapter pipe is a string. Holds no case of its own."""
 
     def setUp(self):
         super().setUp()
@@ -34,6 +37,9 @@ class RecordingReceipts(support.Isolated):
     def receipts(self):
         return [one for one in map(json.loads, self.pipe.getvalue().splitlines())
                 if one["do"] == "received"]
+
+
+class RecordingReceipts(ReceivingOnAChannel):
 
     def test_a_committed_message_is_accepted_before_the_answer_starts(self):
         def answer(*_args):
@@ -94,6 +100,83 @@ class RecordingReceipts(support.Isolated):
     def test_a_receipt_at_the_limit_is_preserved_whole(self):
         self.receive(receipt="x" * 64)
         self.assertEqual("x" * 64, self.receipts()[0]["receipt"])
+
+
+class TestOnlyKillPoint(ReceivingOnAChannel):
+    """The gateway's F4 point: inert unless `RUNDESK_TEST_KILL_AT` names it, and then only once."""
+
+    def setUp(self):
+        super().setUp()
+        self.marker = hosting.at(self.agent, "test") / "test-kill-gateway-after-record.fired"
+        self.marker.parent.mkdir(parents=True, exist_ok=True)
+        self.answered = []
+        self.one = self.one._replace(answering=SimpleNamespace(
+            busy=lambda *_args: False, answer=lambda *args: self.answered.append(args) or True))
+
+    def kill_at(self, value):
+        """The environment with `KILL_AT` set to `value`, or with it absent when `value` is None."""
+        patched = mock.patch.dict(os.environ)
+        patched.start()
+        self.addCleanup(patched.stop)
+        os.environ.pop(hosting.KILL_AT, None)
+        if value is not None:
+            os.environ[hosting.KILL_AT] = value
+        return patched
+
+    def test_unset_or_another_point_changes_nothing(self):
+        for value in (None, "", "adapter-after-claim", "gateway-after-record "):
+            with self.subTest(value=value), mock.patch("os.kill") as kill:
+                self.kill_at(value)
+                self.receive(receipt=f"r-{value}", external_id=f"{len(self.answered) + 1}.1")
+                kill.assert_not_called()
+                self.assertFalse(self.marker.exists())
+        self.assertEqual(4, len(self.answered))
+        self.assertEqual(["accepted"] * 4, [one["outcome"] for one in self.receipts()])
+
+    def test_named_point_kills_after_the_receipt_and_before_the_turn_once(self):
+        def killed(pid, sent):
+            self.assertEqual((os.getpid(), signal.SIGKILL), (pid, sent))
+            self.assertTrue(self.marker.exists())
+            self.assertEqual(["accepted"], [one["outcome"] for one in self.receipts()])
+            self.assertEqual([], self.answered)
+            raise SystemExit("killed")
+
+        self.kill_at(hosting.AFTER_RECORD)
+        with mock.patch("os.kill", side_effect=killed) as kill:
+            with self.assertRaises(SystemExit):
+                self.receive()
+            self.receive(receipt="r2", external_id="2.1")
+        self.assertEqual(1, kill.call_count)
+        self.assertEqual(1, len(self.answered))
+
+    def test_a_redelivery_never_fires_the_point(self):
+        self.receive()
+        self.kill_at(hosting.AFTER_RECORD)
+        with mock.patch("os.kill") as kill:
+            self.receive()
+        kill.assert_not_called()
+        self.assertFalse(self.marker.exists())
+        self.assertEqual(["accepted", "duplicate"], [one["outcome"] for one in self.receipts()])
+
+    def test_a_marker_that_cannot_be_made_leaves_the_point_inert(self):
+        self.marker.parent.rmdir()
+        self.kill_at(hosting.AFTER_RECORD)
+        with mock.patch("os.kill") as kill:
+            self.receive()
+        kill.assert_not_called()
+        self.assertEqual(1, len(self.answered))
+
+    def test_only_a_set_kill_point_is_handed_to_the_adapter(self):
+        row = {"kind": "test", "settings": "{}", "allowed": "[]"}
+        self.kill_at(None)
+        os.environ["RUNDESK_TEST_OTHER"] = "x"
+        self.assertNotIn(hosting.KILL_AT, hosting._the_environment(self.agent, "test", row))
+        os.environ[hosting.KILL_AT] = ""
+        self.assertNotIn(hosting.KILL_AT, hosting._the_environment(self.agent, "test", row))
+        os.environ[hosting.KILL_AT] = "adapter-after-claim"
+        built = hosting._the_environment(self.agent, "test", row)
+        self.assertEqual("adapter-after-claim", built[hosting.KILL_AT])
+        self.assertNotIn("RUNDESK_TEST_OTHER", built)
 
 
 if __name__ == "__main__":

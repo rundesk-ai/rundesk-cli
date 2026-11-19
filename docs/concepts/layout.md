@@ -126,6 +126,8 @@ to `journal/damaged-<n>/` before a new allocation; unreadable files remain untou
 deletes the retained records. Updates do not replace them, and copies carry them with channel data.
 Outbound file snapshots stand in `channels/max/outbox/<id>/<n>` until no unsent record names them.
 Fetched files stand in `channels/max/fetched/<message>/<n>` until Rundesk takes or refuses them.
+A test-only kill point leaves `channels/<kind>/test-kill-<point>.fired` when it fires; nothing makes
+one unless `RUNDESK_TEST_KILL_AT` is set (see `docs/guides/development.md`).
 
 The configuration row in `state.db` also keeps this agent's outbound delegation scope as a nullable
 JSON array. `NULL` means the default, any other available agent; `[]` means none, making this agent

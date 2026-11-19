@@ -17,6 +17,7 @@ import os
 import re
 import selectors
 import shutil
+import signal
 import stat
 import sys
 import tempfile
@@ -48,6 +49,9 @@ A_SEARCH = ((getattr(os, "O_SEARCH", getattr(os, "O_EXEC", 0x40000000))
 A_RUN = re.compile(r"[1-9][0-9]*\.[1-9][0-9]*")
 A_MEMBER = re.compile(r"m[1-9][0-9]*")
 A_THREAD = re.compile(r"t[1-9][0-9]*")
+#: Test only: names one SIGKILL point for an end-to-end failure run (contract §20 F5). Inert unless set.
+KILL_AT = "RUNDESK_TEST_KILL_AT"
+AFTER_CLAIM = "adapter-after-claim"
 
 
 class Superseded(Exception):
@@ -829,6 +833,7 @@ class Core:
                     with self.lock:
                         self.pending[receipt] = (now + retry_after(headers), tries)
                 continue
+            killed_for_a_test(self.home, AFTER_CLAIM)
             with self.lock:
                 self.pending[receipt] = (now + min(60, 3 * (2 ** min(tries, 5))), tries + 1)
             try:
@@ -853,6 +858,22 @@ class Core:
         """Bring a run's files into the channel home. A refused file is left out and said so."""
         return bring(self.client, files[:MOST_FILES], self.home / "fetched" / message,
                      lambda one: "attachments/%d" % one, self.note)
+
+
+def killed_for_a_test(home: Path, point: str) -> None:
+    """Test only: end this process by SIGKILL at `point`, once, when RUNDESK_TEST_KILL_AT names it.
+
+    The marker `test-kill-<point>.fired` is created exclusively first, so a restarted adapter never
+    kills again and a runner can see the point fired. Without the marker the point stays inert.
+    """
+    if os.environ.get(KILL_AT, "") != point:
+        return
+    try:
+        os.close(os.open(str(home / ("test-kill-%s.fired" % point)),
+                         os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+    except OSError:
+        return
+    os.kill(os.getpid(), signal.SIGKILL)
 
 
 def bring(client: Client, files: List[Any], folder: Path, route: Callable[[int], str],
