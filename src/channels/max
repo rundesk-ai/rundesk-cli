@@ -933,6 +933,26 @@ def a_day(said: Any, closing: bool) -> str:
     return said + (" 23:59:59.999999" if closing else " 00:00:00")
 
 
+def hit_files(said: Any) -> List[Dict[str, Any]]:
+    """A search hit's files, described: name, and type and size only where Max gave them.
+
+    Max's own `id` stays behind, because `fetch` reaches the files again by the hit's ref
+    through Max's gates rather than by a link that was true when the search ran.
+    """
+    files: List[Dict[str, Any]] = []
+    for one in said if isinstance(said, list) else []:
+        if not isinstance(one, dict) or not isinstance(one.get("name"), str) or not one["name"]:
+            continue
+        file: Dict[str, Any] = {"name": one["name"]}
+        if isinstance(one.get("type"), str) and one["type"]:
+            file["type"] = one["type"]
+        size = one.get("bytes")
+        if type(size) is int and size >= 0:
+            file["bytes"] = size
+        files.append(file)
+    return files[:MOST_FILES]
+
+
 def search(client: Client, asked: Dict[str, Any],
            clock: Callable[[], float] = time.monotonic) -> Dict[str, Any]:
     """Page Max's newest-first search until `limit`, its end, or the budget. Never retries."""
@@ -996,16 +1016,22 @@ def search(client: Client, asked: Dict[str, Any],
             partial = "Max refused a later page (HTTP %d)" % status
             break
         for hit in body.get("hits") or []:
-            # Max describes no attachments on a hit, so one without text could not be shown.
-            if (isinstance(hit, dict) and isinstance(hit.get("ref"), str) and hit.get("user")
-                    and isinstance(hit.get("at"), str) and hit.get("text")):
-                one = {"who": str(hit["user"]), "when": hit["at"], "text": str(hit.get("text") or ""),
-                       "ref": hit["ref"][:64]}
-                for key, field in (("display", "display"), ("link", "link"),
-                                   ("conversation", "external_place")):
-                    if isinstance(hit.get(key), str) and hit[key]:
-                        one[field] = hit[key]
-                results.append(one)
+            if not (isinstance(hit, dict) and isinstance(hit.get("ref"), str) and hit.get("user")
+                    and isinstance(hit.get("at"), str)):
+                continue
+            files = hit_files(hit.get("attachments"))
+            text = str(hit.get("text") or "")
+            # A hit with neither words nor a file tells an agent only that somebody spoke.
+            if not text and not files:
+                continue
+            one = {"who": str(hit["user"]), "when": hit["at"], "text": text, "ref": hit["ref"][:64]}
+            for key, field in (("display", "display"), ("link", "link"),
+                               ("conversation", "external_place")):
+                if isinstance(hit.get(key), str) and hit[key]:
+                    one[field] = hit[key]
+            if files:
+                one["attachments"] = files
+            results.append(one)
         counted = (body.get("looked") or {}).get("messages") if isinstance(body.get("looked"), dict) else None
         if type(counted) is int:
             looked = (looked or 0) + counted

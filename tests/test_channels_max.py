@@ -288,6 +288,40 @@ class ScriptedCore(Scripted):
         self.assertEqual([3, 3, 3], waits)
         self.assertEqual({"g:1"}, self.core.open_work)
 
+    def test_a_turn_past_fifteen_minutes_stays_open_until_it_ends(self):
+        # A5: nothing measured in elapsed time closes work, only its `ended` record. The poll loop
+        # reads no clock, so summing its waits is its whole sense of time; wall-clock proof of the
+        # same turn is the end-to-end gate against Max, not this suite.
+        self.core.accept({"do": "state", "state": "working", "work": "g:long", "place": "t1"})
+        elapsed = [0.0]
+        waits = []
+        ended_at = []
+
+        def wait(delay):
+            waits.append(delay)
+            if not ended_at:
+                self.assertEqual({"g:long"}, self.core.open_work, elapsed[0])
+            elapsed[0] += delay
+            if not ended_at and elapsed[0] >= 16 * 60:
+                ended_at.append(len(waits))
+                self.core.accept({"do": "work", "work": "g:long", "place": "t1", "for": "1.1",
+                                  "ended": "answered", "marked": "1.1", "state": "done"})
+            elif ended_at and len(waits) > ended_at[0]:
+                self.core.stopped.set()
+            return False
+
+        self.core.active_poll, self.core.idle_poll = 3, 15
+        with mock.patch.object(self.core.stopped, "wait", side_effect=wait):
+            self.core.poll()
+        open_waits = waits[:ended_at[0]]
+        self.assertEqual({3}, set(open_waits))
+        self.assertGreaterEqual(sum(open_waits), 16 * 60)
+        self.assertEqual(15, waits[-1])
+        self.assertEqual(set(), self.core.open_work)
+        self.assertEqual(len(waits), len([c for c in self.calls if c[0] == "inbox"]))
+        self.assertFalse(any("wait" in query for query in self.queries))
+        self.assertEqual([], [s for s in self.said if s.get("say") not in {"ready"}])
+
     def test_prolonged_work_polls_and_receives_steer_and_stop_until_ended(self):
         polls = []
         steer = {"run": 2, "attempt": 1, "conversation": "t1", "user": "m1",
@@ -1028,12 +1062,36 @@ class SearchAndFetch(Scripted):
         self.assertFalse(self.max.search(self.client, {"words": "x"})["ok"])
 
     def test_search_skips_hits_that_could_not_be_shown(self):
-        page = {"hits": [{"ref": "t9/2", "user": "m1", "text": "", "at": "2026-11-19T10:00:00Z"},
+        page = {"hits": [{"ref": "t9/2", "user": "m1", "text": "", "at": "2026-11-19T10:00:00Z",
+                          "attachments": []},
                          {"ref": "t9/1", "user": "m1", "text": "kept", "at": "2026-11-19T09:00:00Z"}],
                 "before": None, "looked": {"messages": 2}}
         self.script = lambda route, body: (200, page, {})
         answer = self.max.search(self.client, {"words": "", "limit": 5})
         self.assertEqual(["t9/1"], [one["ref"] for one in answer["results"]])
+        self.assertNotIn("attachments", answer["results"][0])
+
+    def test_search_keeps_hits_whose_only_content_is_files(self):
+        url = "https://max.example/channel/messages/9/4/attachments/7"
+        page = {"hits": [{"ref": "t9/4", "user": "m1", "text": "", "at": "2026-11-19T11:00:00Z",
+                          "attachments": [{"id": 7, "name": "plan.pdf", "type": "application/pdf",
+                                           "bytes": 81920, "url": url},
+                                          {"id": 8, "name": "notes.txt"}, "junk", {"bytes": 3}]},
+                         {"ref": "t9/3", "user": "m1", "at": "2026-11-19T10:00:00Z",
+                          "attachments": [{"id": 6, "name": "photo.jpg", "bytes": True}]}],
+                "before": None, "looked": {"messages": 2}}
+        self.script = lambda route, body: (200, page, {})
+        answer = self.max.search(self.client, {"words": "plan", "limit": 5})
+        self.assertEqual(["t9/4", "t9/3"], [one["ref"] for one in answer["results"]])
+        empty_text, no_text = answer["results"]
+        self.assertEqual("", empty_text["text"])
+        # Described, never fetched: only what rundesk shows travels, and a said-nothing size stays absent.
+        self.assertEqual([{"name": "plan.pdf", "type": "application/pdf", "bytes": 81920},
+                          {"name": "notes.txt"}],
+                         empty_text["attachments"])
+        self.assertEqual("", no_text["text"])
+        self.assertEqual([{"name": "photo.jpg"}], no_text["attachments"])
+        self.assertEqual(1, len(self.calls))
 
     def test_fetch_rechecks_and_lands_each_file_at_its_own_position(self):
         def reply(route, body):
