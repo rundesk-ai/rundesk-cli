@@ -61,9 +61,7 @@ Being extensionless is why a directory-scanning lint does not see them. A full c
 five invocations: `--capabilities`, `--check` and `serve` for the owner and the gateway, and `search`
 and `fetch` for the agent itself. One of them answers a sixth nobody else says: `src/channels/slack`
 runs itself as `upload`, because a file has a deadline and only a process can be held to one.
-The Max core currently answers the first three invocations; search and fetch follow integration.
-
-- `src/channels/` — `discord`, `slack`, `max` (core transport; parity follows integration)
+- `src/channels/` — `discord`, `slack`, `max`
 - `src/providers/` — `codex`, `claude`, `grok`, `antigravity`
 
 ## Shipped artifacts (src/ — 2 trees)

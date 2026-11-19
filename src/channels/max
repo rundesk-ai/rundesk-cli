@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
-"""Max channel core. One durable writer; polling and pipe draining never await posting.
+"""Max channel adapter. One durable writer; polling and pipe draining never await posting.
 
-Files, search, notices and delegation are deliberately deferred until the first integration gate.
 The journal retains every record so a server-requested rewind never guesses at lost history.
+Outbound files are verified and snapshotted before they are journalled, then staged one per request.
 """
 
 import argparse
+import contextlib
+import errno
 import fcntl
+import hashlib
 import http.client
 import json
 import os
 import re
 import selectors
+import shutil
+import stat
 import sys
 import tempfile
 import threading
@@ -23,13 +28,41 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-CAPABILITIES = {"stream": True, "work": True, "max_text": 20000,
-                "attach": False, "search": False, "thread": False}
-RECORDS = {"received", "state", "deliver", "activity", "work", "answered"}
+CAPABILITIES = {"stream": True, "work": True, "max_text": 20000, "attach": True,
+                "search": True, "thread": True, "address": True}
+RECORDS = {"received", "state", "deliver", "activity", "delegation", "work", "answered"}
+#: Max's own per-file bound; Rundesk's per-delivery bound is ten files.
+MOST_BYTES = 32 * 1024 * 1024
+MOST_FILES = 10
+#: A staged upload may be named for thirty minutes; restage well before that.
+UPLOAD_FRESH = 20 * 60
+SEARCH_BUDGET = 50
+FETCH_BUDGET = 280
+#: Journal fields that are this machine's business and never cross to Max.
+LOCAL = {"snapshot", "of"}
+#: Directories on the way to an outbound file are searched, never read (see the Discord adapter).
+A_SEARCH = ((getattr(os, "O_SEARCH", getattr(os, "O_EXEC", 0x40000000))
+             if sys.platform == "darwin" else getattr(os, "O_PATH", os.O_RDONLY))
+            | os.O_DIRECTORY)
+A_RUN = re.compile(r"[1-9][0-9]*\.[1-9][0-9]*")
+A_MEMBER = re.compile(r"m[1-9][0-9]*")
+A_THREAD = re.compile(r"t[1-9][0-9]*")
 
 
 class Superseded(Exception):
     """Retrying these credentials or this stream would fight another writer."""
+
+
+class Refused(Exception):
+    """A definitive refusal, in words a person can act on."""
+
+
+class Deferred(Exception):
+    """Max asked for a later retry; nothing was settled."""
+
+    def __init__(self, after: float) -> None:
+        super().__init__("Max deferred the request")
+        self.after = after
 
 
 class Journal:
@@ -185,19 +218,29 @@ class Client:
         self.base = base.rstrip("/")
         self.secret = secret
 
-    def request(self, method: str, route: str,
-                data: Optional[Dict[str, Any]] = None) -> Tuple[int, Dict[str, Any], Dict[str, str]]:
-        payload = None if data is None else json.dumps(data, ensure_ascii=False).encode("utf-8")
+    def open(self, method: str, route: str, payload: Optional[bytes] = None,
+             content: str = "", query: Optional[Dict[str, Any]] = None) -> Any:
         headers = {"Authorization": "Bearer " + self.secret, "Accept": "application/json"}
-        if payload is not None:
-            headers["Content-Type"] = "application/json"
-        request = urllib.request.Request(self.base + "/" + route, data=payload,
-                                         headers=headers, method=method)
+        if content:
+            headers["Content-Type"] = content
+        url = self.base + "/" + route
+        if query:
+            url += "?" + urllib.parse.urlencode(query)
+        request = urllib.request.Request(url, data=payload, headers=headers, method=method)
         opener = urllib.request.build_opener(NoRedirect())
         try:
-            response = opener.open(request, timeout=10)
+            return opener.open(request, timeout=10)
         except urllib.error.HTTPError as refused:
-            response = refused
+            return refused
+
+    def request(self, method: str, route: str, data: Optional[Dict[str, Any]] = None,
+                query: Optional[Dict[str, Any]] = None
+                ) -> Tuple[int, Dict[str, Any], Dict[str, str]]:
+        payload = None if data is None else json.dumps(data, ensure_ascii=False).encode("utf-8")
+        return self.answer(self.open(method, route, payload,
+                                     "application/json" if payload is not None else "", query))
+
+    def answer(self, response: Any) -> Tuple[int, Dict[str, Any], Dict[str, str]]:
         with response:
             if response.code in {401, 410}:
                 return response.code, {}, dict(response.headers.items())
@@ -219,6 +262,146 @@ class Client:
                 body = {}
             return response.code, body, dict(response.headers.items())
 
+    def upload(self, at: Path, name: str, size: int,
+               sha256: str) -> Tuple[int, Dict[str, Any], Dict[str, str]]:
+        """Stage one snapshot. One file per request keeps each transfer inside Max's worker budget."""
+        boundary = uuid.uuid4().hex
+        parts = []
+        for field, value in (("name", name), ("bytes", str(size)), ("sha256", sha256)):
+            parts.append(('--%s\r\nContent-Disposition: form-data; name="%s"\r\n\r\n%s\r\n'
+                          % (boundary, field, value)).encode("utf-8"))
+        # The platform's name travels as a field; the part's filename is a fixed safe word.
+        parts.append(('--%s\r\nContent-Disposition: form-data; name="file"; filename="upload"\r\n'
+                      'Content-Type: application/octet-stream\r\n\r\n' % boundary).encode("ascii"))
+        parts.append(at.read_bytes())
+        parts.append(("\r\n--%s--\r\n" % boundary).encode("ascii"))
+        return self.answer(self.open("POST", "uploads", b"".join(parts),
+                                     "multipart/form-data; boundary=" + boundary))
+
+    def download(self, route: str, at: Path, declared: int) -> None:
+        """Write one private file from Max. `Refused` on a definitive answer, `OSError` to retry."""
+        response = self.open("GET", route)
+        with response:
+            if response.code in {401, 410}:
+                raise Superseded("Max binding revoked while fetching a file")
+            if response.code != 200:
+                if response.code == 429 or response.code >= 500:
+                    raise OSError("Max deferred a file (HTTP %d)" % response.code)
+                raise Refused("Max refused a file (HTTP %d)" % response.code)
+            at.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            written = 0
+            with open(os.open(str(at), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as out:
+                while True:
+                    block = response.read(min(1024 * 1024, declared + 1 - written))
+                    if not block:
+                        break
+                    written += len(block)
+                    out.write(block)
+                    if written > declared:
+                        break
+            if written != declared:
+                at.unlink()
+                # A cut-off body is retried; one longer than Max declared never becomes whole.
+                if written < declared:
+                    raise OSError("Max sent %d bytes of a %d-byte file" % (written, declared))
+                raise Refused("Max sent more than the %d bytes it declared" % declared)
+
+
+def a_refusal(why: OSError, at: str, standing: Path, part: str, directory: int) -> Refused:
+    """Name the component at fault, asking the directory above first (contract §11.2)."""
+    code = errno.errorcode.get(why.errno or 0) or "errno %s" % why.errno
+    try:
+        linked = stat.S_ISLNK(os.lstat(part, dir_fd=directory).st_mode)
+        reached = True
+    except OSError as looked:
+        linked = False
+        reached = looked.errno not in (errno.EACCES, errno.EPERM)
+    if why.errno == errno.ELOOP or (why.errno == errno.ENOTDIR and linked):
+        return Refused("could not attach %s: the adapter re-opened it and found a symbolic link "
+                       "at %s, which no component of an approved path may be (%s)"
+                       % (at, standing, code))
+    if why.errno in (errno.EPERM, errno.EACCES) and not reached:
+        return Refused("could not attach %s: the adapter cannot search %s (%s), so %s under it "
+                       "was never reached" % (at, standing.parent, code, standing))
+    if why.errno in (errno.EPERM, errno.EACCES):
+        return Refused("could not attach %s: the adapter may not open %s (%s)" % (at, standing, code))
+    if why.errno == errno.ENOENT:
+        return Refused("could not attach %s: %s was there when it was approved and is not there "
+                       "now (%s)" % (at, standing, code))
+    return Refused("could not attach %s: the adapter could not open %s (%s: %s)"
+                   % (at, standing, code, why.strerror or why))
+
+
+def a_snapshot(said: Any, into: Path) -> Dict[str, Any]:
+    """Re-open an approved file without following links and keep exactly the approved bytes.
+
+    The declared size bounds the read, so a file that grew is refused rather than truncated into
+    something that would still hash correctly. `Refused` on anything at all.
+    """
+    if not isinstance(said, dict):
+        raise Refused("a file to deliver was not an object")
+    at, expected, wanted = said.get("at"), said.get("bytes"), said.get("sha256")
+    if not isinstance(at, str) or not at:
+        raise Refused("a file was named with no path to open")
+    if isinstance(expected, bool) or not isinstance(expected, int) or expected < 0:
+        raise Refused("could not attach %s: it was approved without a size to check against" % at)
+    if expected > MOST_BYTES:
+        raise Refused("could not attach %s: %d bytes is past Max's 32 MiB per file" % (at, expected))
+    if not isinstance(wanted, str) or re.fullmatch(r"[0-9a-f]{64}", wanted) is None:
+        raise Refused("could not attach %s: it was approved without a digest to check against" % at)
+    path = Path(at)
+    if not path.is_absolute() or not path.parts[1:]:
+        raise Refused("could not attach %s: it is not an absolute path to a file" % at)
+    digest = hashlib.sha256()
+    size = 0
+    directory = descriptor = None
+    try:
+        directory = os.open(path.parts[0], A_SEARCH | os.O_NOFOLLOW)
+        for nth, part in enumerate(path.parts[1:-1], start=1):
+            try:
+                below = os.open(part, A_SEARCH | os.O_NOFOLLOW, dir_fd=directory)
+            except OSError as why:
+                raise a_refusal(why, at, Path(*path.parts[:nth + 1]), part, directory) from why
+            os.close(directory)
+            directory = below
+        try:
+            descriptor = os.open(path.parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                 dir_fd=directory)
+        except OSError as why:
+            raise a_refusal(why, at, path, path.parts[-1], directory) from why
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError("it is not a regular file")
+        with contextlib.suppress(OSError):
+            fcntl.fcntl(descriptor, fcntl.F_SETFL,
+                        fcntl.fcntl(descriptor, fcntl.F_GETFL) & ~os.O_NONBLOCK)
+        into.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with os.fdopen(descriptor, "rb") as reading, \
+                open(os.open(str(into), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as kept:
+            descriptor = None
+            while size <= expected:
+                block = reading.read(min(1024 * 1024, expected + 1 - size))
+                if not block:
+                    break
+                size += len(block)
+                digest.update(block)
+                kept.write(block)
+            kept.flush()
+            os.fsync(kept.fileno())
+    except Refused:
+        raise
+    except (OSError, ValueError) as why:
+        raise Refused("could not attach %s: %s" % (at, why)) from why
+    finally:
+        if directory is not None:
+            os.close(directory)
+        if descriptor is not None:
+            os.close(descriptor)
+    if size != expected or digest.hexdigest() != wanted:
+        raise Refused("could not attach %s: it changed after it was approved" % at)
+    # The name is rundesk's own; taken as a bare name because a separator would pretend to be a path.
+    return {"name": Path(str(said.get("name") or path.name)).name, "bytes": expected,
+            "sha256": wanted}
+
 
 def retry_after(headers: Dict[str, str]) -> float:
     raw = next((v for k, v in headers.items() if k.lower() == "retry-after"), "3")
@@ -231,8 +414,18 @@ def retry_after(headers: Dict[str, str]) -> float:
 class Core:
     def __init__(self, client: Client, journal: Journal, applied: int,
                  emit: Callable[[Dict[str, Any]], None], active_poll: float = 3,
-                 idle_poll: float = 15) -> None:
+                 idle_poll: float = 15, allowed: Optional[List[str]] = None) -> None:
         self.client, self.journal, self.emit = client, journal, emit
+        # The journal stands inside the channel home, which is where every staged file belongs.
+        self.home = journal.at.parent
+        self.allowed = ([one for one in os.environ.get("RUNDESK_ALLOW", "").split(",") if one]
+                        if allowed is None else allowed)
+        #: Staged upload ids by (delivery id, file index), with when each was staged.
+        self.uploads: Dict[Tuple[str, int], Tuple[str, float]] = {}
+        #: Notice fan-out by Rundesk's delivery id: copies left, and whether any landed.
+        self.groups: Dict[str, Dict[str, Any]] = {}
+        #: Snapshot folders being written whose record is not yet journalled.
+        self.making: set = set()
         self.cursor = applied + 1
         self.active_poll, self.idle_poll = active_poll, idle_poll
         self.stopped = threading.Event()
@@ -268,10 +461,21 @@ class Core:
             return
         if kind not in RECORDS:
             return
-        # Never publish a delivery whose deferred files/notice behaviour was not performed.
-        if kind == "deliver" and (record.get("files") or record.get("notice") or record.get("to")):
-            self.say({"say": "failed", "id": record.get("id"),
-                      "why": "Max core does not yet support files or initiated messages"})
+        if kind == "deliver":
+            folder = "outbox/" + uuid.uuid4().hex
+            with self.lock:
+                self.making.add(folder)
+            try:
+                for row in self.outbound(record, folder):
+                    self.journal.append(row)
+            except Refused as why:
+                shutil.rmtree(str(self.home / folder), ignore_errors=True)
+                self.say({"say": "failed", "id": record.get("id"), "why": str(why)})
+                return
+            finally:
+                with self.lock:
+                    self.making.discard(folder)
+            self.changed.set()
             return
         self.journal.append(record)
         with self.lock:
@@ -295,7 +499,124 @@ class Core:
                 self.open_work.discard("legacy:" + record.get("place", ""))
         self.changed.set()
 
+    def outbound(self, record: Dict[str, Any], folder: str) -> List[Dict[str, Any]]:
+        """What one Rundesk delivery becomes on the journal: itself, or one copy per notified person."""
+        record = dict(record)
+        answering = record.get("reply_to")
+        # Max anchors only on a run attempt; anything else degrades to the place, never to a refusal.
+        if answering is not None and not (isinstance(answering, str) and A_RUN.fullmatch(answering)):
+            record.pop("reply_to", None)
+            record.pop("threaded", None)
+        aimed = record.get("to")
+        if aimed is not None:
+            if not isinstance(aimed, dict):
+                raise Refused("the destination to deliver to was not an object")
+            if aimed.get("place"):
+                raise Refused("Max has no place destinations: its allow list names people, so a "
+                              "delivery may be aimed only at one of them (to.sender)")
+            sender = aimed.get("sender")
+            if not isinstance(sender, str) or not A_MEMBER.fullmatch(sender):
+                raise Refused("Max names a person as m<member-id>, and %r is not one" % (sender,))
+            record["to"] = {"sender": sender}
+            record.pop("place", None)
+        files = record.pop("files", None) or []
+        if not isinstance(files, list):
+            raise Refused("the files to deliver were not a list")
+        if len(files) > MOST_FILES:
+            raise Refused("%d files is past the %d one delivery may carry" % (len(files), MOST_FILES))
+        if files:
+            record["files"] = [a_snapshot(one, self.home / folder / str(n))
+                               for n, one in enumerate(files)]
+            record["snapshot"] = folder
+        if record.get("notice") is not True or aimed is not None:
+            return [record]
+        # A notice is permission to give each allowed person a copy in their own direct thread.
+        given = str(record.get("id"))
+        people = [one for one in self.allowed if A_MEMBER.fullmatch(one)]
+        if not people:
+            raise Refused("there is no allowed Max member to notify")
+        copies = []
+        for person in people:
+            copy = dict(record, id="%s/%s" % (given, person), to={"sender": person}, of=given)
+            for key in ("place", "reply_to", "threaded"):
+                copy.pop(key, None)
+            copies.append(copy)
+        with self.lock:
+            self.groups[given] = {"left": len(copies), "landed": False}
+        return copies
+
+    def staged(self, row: Dict[str, Any]) -> Optional[List[str]]:
+        """Upload each snapshot alone. `None` when Max refused one, so the delivery is refused whole."""
+        ids = []
+        for n, one in enumerate(row["files"]):
+            key = (str(row.get("id")), n)
+            kept = self.uploads.get(key)
+            if kept is not None and time.monotonic() - kept[1] < UPLOAD_FRESH:
+                ids.append(kept[0])
+                continue
+            try:
+                status, body, headers = self.client.upload(
+                    self.home / row["snapshot"] / str(n), one["name"], one["bytes"], one["sha256"])
+            except FileNotFoundError:
+                self.note("Max delivery %s lost its file snapshot; refusing it" % row.get("id"))
+                return None
+            if status in {401, 410}:
+                raise Superseded("Max binding revoked while staging a file")
+            if status == 429 or status >= 500:
+                raise Deferred(retry_after(headers))
+            if status != 201 or not isinstance(body.get("upload"), str):
+                self.note("Max refused a file for delivery %s (HTTP %d)" % (row.get("id"), status))
+                return None
+            self.uploads[key] = (body["upload"], time.monotonic())
+            ids.append(body["upload"])
+        return ids
+
+    def settled(self, row: Dict[str, Any], external: Optional[str], why: str) -> None:
+        """Report one delivery's outcome; a notice's copies answer Rundesk's one id once."""
+        for key in [key for key in self.uploads if key[0] == str(row.get("id"))]:
+            del self.uploads[key]
+        given = row.get("of")
+        if given is None:
+            if external is not None:
+                self.say({"say": "delivered", "id": row.get("id"), "external_id": external})
+            else:
+                self.say({"say": "failed", "id": row.get("id"), "why": why})
+            return
+        with self.lock:
+            group = self.groups.get(given)
+            first = group is None or not group["landed"]
+            if group is not None:
+                group["left"] -= 1
+                group["landed"] = group["landed"] or external is not None
+                if group["left"] <= 0:
+                    del self.groups[given]
+        if external is not None:
+            if first:
+                self.say({"say": "delivered", "id": given, "external_id": external})
+            return
+        self.note("notice copy for %s was not delivered: %s" % (row["to"]["sender"], why))
+        if group is not None and group["left"] <= 0 and not group["landed"]:
+            self.say({"say": "failed", "id": given,
+                      "why": "no allowed Max member received the notice: " + why})
+
+    def prune(self) -> None:
+        """Remove snapshots no unsent record names. A folder still being written is kept."""
+        with self.journal.lock:
+            wanted = {row.get("snapshot") for row in self.journal.records
+                      if row["seq"] >= self.cursor}
+        with self.lock:
+            wanted |= self.making
+        outbox = self.home / "outbox"
+        try:
+            standing = list(outbox.iterdir())
+        except OSError:
+            return
+        for one in standing:
+            if "outbox/" + one.name not in wanted:
+                shutil.rmtree(str(one), ignore_errors=True)
+
     def post(self) -> None:
+        self.prune()
         while not self.stopped.is_set():
             try:
                 if self.journal.header["stream"] is None:
@@ -322,7 +643,13 @@ class Core:
                     self.changed.wait(0.2)
                     self.changed.clear()
                     continue
-                payload = dict(row, stream=self.journal.header["stream"])
+                payload = {key: value for key, value in row.items() if key not in LOCAL}
+                payload["stream"] = self.journal.header["stream"]
+                if row["do"] == "deliver" and row.get("files"):
+                    staged = self.staged(row)
+                    # Without its uploads Max refuses the record and still consumes its sequence.
+                    payload["files"] = [dict(one, **({"upload": staged[n]} if staged else {}))
+                                        for n, one in enumerate(row["files"])]
                 # Rundesk's terminal is "done"; Max's run status is "succeeded".
                 if payload.get("state") == "done" and payload["do"] in {"state", "work"}:
                     payload["state"] = "succeeded"
@@ -344,18 +671,20 @@ class Core:
                 elif 200 <= status < 300 or 400 <= status < 500:
                     if row["do"] == "deliver":
                         if status in {200, 201} and body.get("id") is not None:
-                            self.say({"say": "delivered", "id": row.get("id"),
-                                      "external_id": str(body["id"])})
+                            self.settled(row, str(body["id"]), "")
                         elif 400 <= status < 500:
-                            self.say({"say": "failed", "id": row.get("id"),
-                                      "why": "Max refused delivery (HTTP %d)" % status})
+                            self.settled(row, None, "Max refused delivery (HTTP %d)" % status)
                         else:
                             raise ValueError("Max delivery response omitted id")
                     self.cursor += 1
+                    if row.get("snapshot"):
+                        self.prune()
                 else:
                     self.stopped.wait(retry_after(headers))
             except Superseded as why:
                 self.fail(78, str(why))
+            except Deferred as why:
+                self.stopped.wait(why.after)
             except (OSError, ValueError, http.client.HTTPException) as why:
                 # The request may already have committed. Only a retry may earn an outcome.
                 self.note("Max posting deferred (%s)" % type(why).__name__)
@@ -396,9 +725,6 @@ class Core:
                 self.say(command)
                 fresh = True
         for run in body.get("runs", []):
-            if run.get("attachments"):
-                self.note("Max core deferred a run with files until file support is integrated")
-                continue
             receipt = "%s.%s" % (run["run"], run["attempt"])
             now = time.monotonic()
             with self.lock:
@@ -418,15 +744,54 @@ class Core:
                 continue
             with self.lock:
                 self.pending[receipt] = (now + min(60, 3 * (2 ** min(tries, 5))), tries + 1)
+            try:
+                landed = self.fetched(run.get("attachments") or [], receipt)
+            except (OSError, http.client.HTTPException) as why:
+                # Not handed on: the claimed run is offered again after its backoff.
+                self.note("Max file deferred for %s (%s)" % (receipt, why))
+                continue
             arrived = {key: run[key] for key in
                        ("conversation", "user", "display", "where", "external_place", "text", "reply_to")
                        if key in run}
             arrived.update(say="arrived", external_id=receipt, receipt=receipt)
+            if landed:
+                arrived["attachments"] = landed
             self.say(arrived)
             if tries == 9:
                 self.note("Max message has been handed to Rundesk ten times without a receipt")
             fresh = True
         return fresh
+
+    def fetched(self, files: List[Any], message: str) -> List[Dict[str, Any]]:
+        """Bring a run's files into the channel home. A refused file is left out and said so."""
+        return bring(self.client, files[:MOST_FILES], self.home / "fetched" / message,
+                     lambda one: "attachments/%d" % one, self.note)
+
+
+def bring(client: Client, files: List[Any], folder: Path, route: Callable[[int], str],
+          note: Callable[[str], None], first: int = 0) -> List[Dict[str, Any]]:
+    """Download each described file under `folder/<n>`, reporting the size Max declared."""
+    landed = []
+    for n, one in enumerate(files, start=first):
+        ident = one.get("id") if isinstance(one, dict) else None
+        declared = one.get("bytes") if isinstance(one, dict) else None
+        if (type(ident) is not int or type(declared) is not int
+                or not 0 <= declared <= MOST_BYTES):
+            note("Max described a file this adapter cannot fetch")
+            continue
+        at = folder / str(n)
+        with contextlib.suppress(FileNotFoundError):
+            at.unlink()
+        try:
+            client.download(route(ident), at, declared)
+        except Refused as why:
+            note(str(why))
+            continue
+        kept = {"at": str(at), "bytes": declared}
+        if isinstance(one.get("name"), str) and one["name"]:
+            kept["name"] = one["name"]
+        landed.append(kept)
+    return landed
 
 
 def serve(client: Client, home: Path, emit: Callable[[Dict[str, Any]], None]) -> int:
@@ -472,6 +837,134 @@ def serve(client: Client, home: Path, emit: Callable[[Dict[str, Any]], None]) ->
     return core.code
 
 
+def a_day(said: Any, closing: bool) -> str:
+    if not isinstance(said, str) or not said:
+        return ""
+    if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", said) is None:
+        raise Refused("%r is not a day written YYYY-MM-DD" % said)
+    # Days are inclusive; Max compares instants.
+    return said + (" 23:59:59.999999" if closing else " 00:00:00")
+
+
+def search(client: Client, asked: Dict[str, Any],
+           clock: Callable[[], float] = time.monotonic) -> Dict[str, Any]:
+    """Page Max's newest-first search until `limit`, its end, or the budget. Never retries."""
+    query: Dict[str, Any] = {}
+    try:
+        if asked.get("words"):
+            query["words"] = str(asked["words"])
+        place = asked.get("place") or ""
+        if place:
+            if not isinstance(place, str) or not A_THREAD.fullmatch(place):
+                raise Refused("Max scopes a search to one thread, written t<thread-id> as a search "
+                              "result's external_place gives it; %r is not one" % (place,))
+            query["place"] = place
+        user = asked.get("user") or ""
+        if user:
+            if not isinstance(user, str) or not A_MEMBER.fullmatch(user):
+                raise Refused("Max scopes a search to one person, written m<member-id>; %r is not "
+                              "one" % (user,))
+            query["user"] = user
+        for key, closing in (("since", False), ("until", True)):
+            day = a_day(asked.get(key), closing)
+            if day:
+                query[key] = day
+    except Refused as why:
+        return {"ok": False, "why": str(why)}
+    limit = asked.get("limit")
+    limit = limit if type(limit) is int and 1 <= limit <= 100 else 20
+    started = clock()
+    results: List[Dict[str, Any]] = []
+    looked: Optional[int] = 0
+    cursor = None
+    partial = ""
+    while len(results) < limit:
+        if clock() - started >= SEARCH_BUDGET:
+            partial = "Max's search was stopped after %d seconds, before it reached the end" % SEARCH_BUDGET
+            break
+        page = dict(query, limit=min(50, limit - len(results)))
+        if cursor:
+            page["before"] = cursor
+        try:
+            status, body, _headers = client.request("GET", "search", query=page)
+        except (OSError, ValueError, http.client.HTTPException) as why:
+            if not results:
+                return {"ok": False, "why": "Max could not be reached to search (%s)" % type(why).__name__}
+            partial = "Max stopped answering part way through (%s)" % type(why).__name__
+            break
+        if status in {401, 410}:
+            return {"ok": False, "why": "the Max binding was revoked; reconnect the channel"}
+        if status == 429 or status >= 500:
+            partial = "Max was busy (HTTP %d) before the search finished; ask again shortly" % status
+            break
+        if status != 200:
+            if not results:
+                return {"ok": False, "why": "Max refused the search (HTTP %d)" % status}
+            partial = "Max refused a later page (HTTP %d)" % status
+            break
+        for hit in body.get("hits") or []:
+            if (isinstance(hit, dict) and isinstance(hit.get("ref"), str) and hit.get("user")
+                    and isinstance(hit.get("at"), str)):
+                one = {"who": str(hit["user"]), "when": hit["at"], "text": str(hit.get("text") or ""),
+                       "ref": hit["ref"][:64]}
+                for key, field in (("display", "display"), ("link", "link"),
+                                   ("conversation", "external_place")):
+                    if isinstance(hit.get(key), str) and hit[key]:
+                        one[field] = hit[key]
+                results.append(one)
+        counted = (body.get("looked") or {}).get("messages") if isinstance(body.get("looked"), dict) else None
+        looked = looked + counted if looked is not None and type(counted) is int else None
+        cursor = body.get("before")
+        if not isinstance(cursor, str) or not cursor:
+            break
+    answer: Dict[str, Any] = {"ok": True, "results": results[:limit], "partial": partial}
+    # A count Max did not give is left out rather than guessed.
+    if looked is not None:
+        answer["looked"] = {"messages": looked}
+    return answer
+
+
+def fetch(client: Client, asked: Dict[str, Any], home: Path,
+          clock: Callable[[], float] = time.monotonic) -> Dict[str, Any]:
+    """Reach one searched message again, through Max's gates, and bring its files here."""
+    ref = asked.get("ref")
+    found = re.fullmatch(r"t([1-9][0-9]*)/([1-9][0-9]*)", ref) if isinstance(ref, str) else None
+    if found is None:
+        return {"ok": False, "why": "%r is not a Max search result's ref" % (ref,)}
+    thread, message = found.groups()
+    started = clock()
+    try:
+        status, body, _headers = client.request(
+            "GET", "messages/%s/%s/attachments" % (thread, message))
+    except (OSError, ValueError, http.client.HTTPException) as why:
+        return {"ok": False, "why": "Max could not be reached (%s)" % type(why).__name__}
+    if status in {401, 410}:
+        return {"ok": False, "why": "the Max binding was revoked; reconnect the channel"}
+    if status == 403:
+        return {"ok": False, "why": "Max will not show that message to this agent now"}
+    if status != 200:
+        return {"ok": False, "why": "Max refused the fetch (HTTP %d)" % status}
+    described = body.get("attachments") or []
+    if not isinstance(described, list):
+        return {"ok": False, "why": "Max described the message's files in a form this adapter cannot read"}
+    missed: List[str] = []
+    landed: List[Dict[str, Any]] = []
+    for n, one in enumerate(described[:MOST_FILES]):
+        if clock() - started >= FETCH_BUDGET:
+            missed.append("time ran out before every file was fetched")
+            break
+        try:
+            landed += bring(client, [one], home / "fetched" / message,
+                            lambda ident: "messages/%s/%s/attachments/%d" % (thread, message, ident),
+                            missed.append, first=n)
+        except Superseded:
+            return {"ok": False, "why": "the Max binding was revoked; reconnect the channel"}
+        except (OSError, http.client.HTTPException) as why:
+            missed.append(str(why))
+    return {"ok": True, "message": message, "attachments": landed,
+            "partial": "; ".join(missed)}
+
+
 def main(argv: List[str]) -> int:
     def emit(record: Dict[str, Any]) -> None:
         print(json.dumps(record, ensure_ascii=False), flush=True)
@@ -480,8 +973,26 @@ def main(argv: List[str]) -> int:
         emit(CAPABILITIES)
         return 0
     checking = argv[:1] == ["--check"]
+    if argv in (["search"], ["fetch"]):
+        try:
+            asked = json.loads(sys.stdin.read() or "{}")
+            if not isinstance(asked, dict):
+                raise ValueError("the request was not an object")
+            settings = json.loads(os.environ.get("RUNDESK_SETTINGS", "{}"))
+            secret = os.environ.get("MAX_CHANNEL_SECRET", "")
+            if not secret:
+                raise ValueError("nothing set MAX_CHANNEL_SECRET")
+            client = Client(settings.get("endpoint") or "", secret)
+            if argv == ["search"]:
+                emit(search(client, asked))
+            else:
+                emit(fetch(client, asked, Path(os.environ["RUNDESK_CHANNEL_HOME"])))
+        except (ValueError, KeyError, AttributeError) as why:
+            emit({"ok": False, "why": "%s: %s" % (type(why).__name__, why)})
+        return 0
     if not checking and argv != ["serve"]:
-        print("max: expected --capabilities, --check [--endpoint URL] or serve", file=sys.stderr)
+        print("max: expected --capabilities, --check [--endpoint URL], serve, search or fetch",
+              file=sys.stderr)
         return 2
     secret = os.environ.get("MAX_CHANNEL_SECRET", "")
     try:
@@ -498,8 +1009,9 @@ def main(argv: List[str]) -> int:
             if status != 200:
                 raise ValueError("Max refused check (HTTP %d)" % status)
             settings["max_text"] = body["max_text"]
-            emit({"ok": True, "describes": "Max core for " + str(body["agent"]),
-                  "settings": settings, "secret": {"env": ["MAX_CHANNEL_SECRET"]}})
+            emit({"ok": True, "describes": "Max Chat for " + str(body["agent"]),
+                  "notify_place": "notices", "settings": settings,
+                  "secret": {"env": ["MAX_CHANNEL_SECRET"]}})
             return 0
         return serve(client, Path(os.environ["RUNDESK_CHANNEL_HOME"]), emit)
     except Superseded as why:

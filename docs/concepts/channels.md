@@ -121,15 +121,14 @@ behind that websocket and it is not the app the bot token was issued by, the ada
 agent's log and readiness is unaffected — every event would be going to the other app's connections,
 and that is a thing to be told rather than a thing this decides.
 
-## Max core transport
+## Max Chat transport
 
-The `max` adapter currently supports the first integration milestone: text arrivals, steering,
-commands, progress, correlated work and answers. Files, search, notices, delegation displays and
-child-thread creation follow that integration gate; it declares no attachment or search capability.
-It refuses outbound files and initiated messages explicitly and leaves inbound file runs queued.
+The `max` adapter carries text arrivals, steering, commands, progress, correlated work, answers,
+files both ways, notices, delegation lines and child-thread replies, and answers `search` and
+`fetch`. It declares `attach`, `search`, `thread` and `address`.
 
 `--check --endpoint https://chat.example/channel/<tenant-uuid>` checks the binding with
-`MAX_CHANNEL_SECRET` and keeps the endpoint in settings. Only HTTPS is accepted, except literal
+`MAX_CHANNEL_SECRET`, keeps the endpoint in settings and reports `notices` as its notify place. Only HTTPS is accepted, except literal
 loopback HTTP for isolated tests. Redirects are refused so the bearer secret stays at that endpoint.
 The allow list uses Max's `m<member-id>` sender ids; Rundesk still decides admission.
 
@@ -146,6 +145,16 @@ damaged journal files are preserved in a numbered directory with a warning. Unre
 left untouched and exits with a retryable code. Rundesk's terminal `done` maps to Max's `succeeded`
 at the transport boundary, including an authoritative `ended.state`; null mark authority stays null.
 The [layout](layout.md#an-agent-is-a-directory-and-everything-it-has-is-inside-it) names the journal files.
+
+| Parity | What the adapter does |
+|---|---|
+| Inbound files | Fetches each through `attachments/{id}` (never the described URL) into `fetched/<run>.<attempt>/<n>` and reports Max's declared size. A body of another size is not handed on: a short one retries the run, a long or refused one is left out with a note |
+| Outbound files | Re-opens every component with `O_NOFOLLOW`, snapshots the approved size and SHA-256 into `outbox/` before journalling, and refuses the whole delivery on any mismatch. Posting stages each snapshot alone through `uploads`, restaging after 20 minutes, then names the uploads in the `deliver`. A refused upload posts the record without them, so Max refuses it and the sequence still advances |
+| Notices | `notice: true` without `to` becomes one copy per allowed `m…` member, each aimed `to.sender` with id `<id>/<member>`. Rundesk hears `delivered` once a copy lands and `failed` only when none did. `to.place` is refused: the allow list names people only |
+| Child threads | `threaded` travels beside a `reply_to` naming a run attempt; any other `reply_to` is dropped with it, and the delivery stays in its place |
+| Delegation | Each record is journalled and posted whole; Max renders the line |
+| Search | Pages Max's newest-first search to `limit`, stopping at 50 seconds with `partial`. Days are inclusive. A scope must be `t<thread>` (a result's `external_place`) or `m<member>`; a `c<channel>` or `d` place is refused |
+| Fetch | Takes a `t<thread>/<message>` ref, rechecks Max's gates, and lands up to ten files under `fetched/<message>/<n>`, naming any it could not bring in `partial` |
 
 ## Going out: cut to what the platform takes
 

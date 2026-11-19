@@ -1,5 +1,6 @@
 """The isolated Max core: durable ordering and independently progressing pipes/polls."""
 
+import hashlib
 import importlib.machinery
 import importlib.util
 import json
@@ -9,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 
@@ -143,11 +145,12 @@ class JournalRecovery(support.Isolated):
         self.assertEqual(["file", "rename", "directory"], events)
 
 
-class ScriptedCore(support.Isolated):
+class Scripted(support.Isolated):
     def setUp(self):
         super().setUp()
         self.max = adapter()
         self.calls = []
+        self.queries = []
         self.said = []
         self.release = threading.Event()
         self.recording = threading.Event()
@@ -163,8 +166,12 @@ class ScriptedCore(support.Isolated):
 
             def respond(self):
                 data = self.rfile.read(int(self.headers.get("Content-Length", "0")))
-                body = json.loads(data) if data else {}
-                route = self.path.rsplit("/", 1)[-1]
+                json_body = self.headers.get("Content-Type", "").startswith("application/json")
+                body = (json.loads(data) if json_body else data) if data else {}
+                split = urllib.parse.urlsplit(self.path)
+                # Nested routes keep their whole suffix; the core's single-word routes are unchanged.
+                route = split.path.split("/synthetic-tenant/", 1)[-1]
+                owner.queries.append(dict(urllib.parse.parse_qsl(split.query)))
                 owner.calls.append((route, body, self.headers.get("Authorization")))
                 status, result, headers = owner.script(route, body)
                 encoded = (result if isinstance(result, bytes) else json.dumps(result).encode()) if result is not None and status != 204 else b""
@@ -235,6 +242,8 @@ class ScriptedCore(support.Isolated):
             return 200, {"id": "message-1"}, {}
         return 200, {}, {}
 
+
+class ScriptedCore(Scripted):
     def test_empty_heartbeat_polls_again_without_wait_parameter(self):
         self.start("poll")
         self.until(lambda: len([c for c in self.calls if c[0] == "inbox"]) >= 2)
@@ -610,7 +619,7 @@ os._exit(0)
         self.assertEqual(allocations[0], allocations[1])
         self.assertEqual(pending["nonce"], json.loads((channel / "journal" / "stream.json").read_text())["nonce"])
 
-    def test_core_refuses_deferred_delivery_without_claiming_success(self):
+    def test_unverifiable_file_refuses_delivery_without_claiming_success(self):
         self.core.accept({"do": "deliver", "id": "file", "text": "file", "files": [{"name": "x"}]})
         self.assertEqual("failed", self.said[0]["say"])
         self.assertEqual([], self.journal.records)
@@ -654,6 +663,295 @@ os._exit(0)
             if process.poll() is None:
                 process.kill()
                 process.communicate()
+
+
+class ScriptedParity(Scripted):
+    """Files, notices, delegation, child threads, search and fetch against the scripted Max routes."""
+
+    def approved(self, name="report.txt", content=b"quarterly numbers\n"):
+        folder = self.home / "agents" / "synthetic" / "home"
+        folder.mkdir(parents=True, exist_ok=True)
+        at = folder / name
+        at.write_bytes(content)
+        return {"name": name, "at": str(at), "bytes": len(content),
+                "sha256": hashlib.sha256(content).hexdigest()}
+
+    def records(self):
+        return [c[1] for c in self.calls if c[0] == "records"]
+
+    def test_capabilities_and_check_offer_parity_and_notices(self):
+        out = subprocess.run([sys.executable, "-B", str(support.CHECKOUT / "src" / "channels" / "max"),
+                              "--capabilities"], capture_output=True, text=True, timeout=20)
+        said = json.loads(out.stdout)
+        for key in ("attach", "search", "thread", "address"):
+            self.assertIs(True, said[key], key)
+        env = dict(os.environ, MAX_CHANNEL_SECRET="synthetic-secret",
+                   RUNDESK_SETTINGS=json.dumps({"endpoint": self.endpoint}))
+        out = subprocess.run([sys.executable, "-B", str(support.CHECKOUT / "src" / "channels" / "max"),
+                              "--check"], capture_output=True, text=True, timeout=20, env=env)
+        checked = json.loads(out.stdout)
+        self.assertTrue(checked["ok"], checked)
+        self.assertEqual("notices", checked["notify_place"])
+
+    def test_inbound_file_lands_with_declared_size_and_never_follows_the_described_url(self):
+        def reply(route, body):
+            if route == "attachments/7":
+                return 200, b"hello", {"Content-Length": "5"}
+            return self.reply(route, body)
+
+        self.script = reply
+        run = {"run": 3, "attempt": 1, "conversation": "t9", "user": "m1", "text": "see file",
+               "attachments": [{"id": 7, "name": "plan.pdf", "bytes": 5,
+                                "url": "https://elsewhere.invalid/steal"}]}
+        self.assertTrue(self.core.inbox({"runs": [run]}))
+        arrived = next(s for s in self.said if s.get("say") == "arrived")
+        at = self.home / "channel" / "fetched" / "3.1" / "0"
+        self.assertEqual([{"at": str(at), "name": "plan.pdf", "bytes": 5}], arrived["attachments"])
+        self.assertEqual(b"hello", at.read_bytes())
+        self.assertEqual(["claim", "attachments/7"], [c[0] for c in self.calls])
+
+    def test_refused_inbound_file_is_left_out_so_files_only_message_is_not_taken_in(self):
+        self.script = lambda route, body: (403, {}, {}) if route.startswith("attachments/") else self.reply(route, body)
+        run = {"run": 4, "attempt": 2, "conversation": "t9", "user": "m1", "text": "",
+               "attachments": [{"id": 8, "name": "x.bin", "bytes": 3}]}
+        self.assertTrue(self.core.inbox({"runs": [run]}))
+        arrived = next(s for s in self.said if s.get("say") == "arrived")
+        self.assertNotIn("attachments", arrived)
+        self.assertEqual("", arrived["text"])
+        self.assertTrue(any("HTTP 403" in s.get("text", "") for s in self.said if s.get("say") == "note"))
+
+    def test_deferred_inbound_file_is_not_handed_on_until_it_downloads_whole(self):
+        answers = [(503, {}, {}), (200, b"abc", {"Content-Length": "3"})]
+        self.script = lambda route, body: answers.pop(0) if route == "attachments/5" else self.reply(route, body)
+        run = {"run": 5, "attempt": 1, "conversation": "t9", "user": "m1", "text": "",
+               "attachments": [{"id": 5, "name": "a", "bytes": 3}]}
+        self.core.inbox({"runs": [run]})
+        self.assertEqual([], [s for s in self.said if s.get("say") == "arrived"])
+        with mock.patch.object(self.max.time, "monotonic", return_value=time.monotonic() + 100):
+            self.core.inbox({"runs": [run]})
+        arrived = [s for s in self.said if s.get("say") == "arrived"]
+        self.assertEqual(1, len(arrived))
+        self.assertEqual(3, arrived[0]["attachments"][0]["bytes"])
+
+    def test_inbound_body_must_match_the_declared_size(self):
+        bodies = {"attachments/1": (200, b"abc", {"Content-Length": "3"}),
+                  "attachments/2": (200, b"toolong", {"Content-Length": "7"})}
+        self.script = lambda route, body: bodies.get(route) or self.reply(route, body)
+        short = {"run": 6, "attempt": 1, "conversation": "t9", "user": "m1", "text": "",
+                 "attachments": [{"id": 1, "name": "a", "bytes": 5}]}
+        self.core.inbox({"runs": [short]})
+        self.assertEqual([], [s for s in self.said if s.get("say") == "arrived"])
+        self.assertFalse((self.home / "channel" / "fetched" / "6.1" / "0").exists())
+        long = {"run": 7, "attempt": 1, "conversation": "t9", "user": "m1", "text": "hi",
+                "attachments": [{"id": 2, "name": "b", "bytes": 5}]}
+        self.core.inbox({"runs": [long]})
+        arrived = [s for s in self.said if s.get("say") == "arrived"]
+        self.assertEqual(1, len(arrived))
+        self.assertNotIn("attachments", arrived[0])
+        self.assertFalse((self.home / "channel" / "fetched" / "7.1" / "0").exists())
+
+    def test_outbound_file_is_snapshotted_staged_alone_and_named_by_upload(self):
+        uploads = []
+
+        def reply(route, body):
+            if route == "uploads":
+                uploads.append(body)
+                return 201, {"upload": "00000000-0000-4000-8000-000000000001"}, {}
+            return self.reply(route, body)
+
+        self.script = reply
+        said = self.approved()
+        self.core.accept({"do": "deliver", "id": "p-0", "place": "t9", "text": "here", "files": [said]})
+        # The original may change after approval: the journalled snapshot is what goes out.
+        (self.home / "agents" / "synthetic" / "home" / "report.txt").write_bytes(b"changed")
+        self.start("post")
+        self.until(lambda: any(s.get("say") == "delivered" for s in self.said))
+        self.assertEqual(1, len(uploads))
+        self.assertIn(b"quarterly numbers\n", uploads[0])
+        self.assertIn(said["sha256"].encode(), uploads[0])
+        posted = self.records()[0]
+        self.assertEqual([{"name": "report.txt", "bytes": said["bytes"], "sha256": said["sha256"],
+                           "upload": "00000000-0000-4000-8000-000000000001"}], posted["files"])
+        self.assertNotIn("snapshot", posted)
+        self.until(lambda: list((self.home / "channel" / "outbox").iterdir()) == [])
+
+    def test_file_changed_or_linked_before_snapshot_refuses_whole_delivery(self):
+        said = self.approved()
+        said["sha256"] = "0" * 64
+        self.core.accept({"do": "deliver", "id": "bad", "place": "t9", "text": "x", "files": [said]})
+        linked = self.approved("real.txt")
+        link = self.home / "linked"
+        os.symlink(str(self.home / "agents"), str(link))
+        linked["at"] = str(link / "synthetic" / "home" / "real.txt")
+        self.core.accept({"do": "deliver", "id": "link", "place": "t9", "text": "x", "files": [linked]})
+        failed = [s for s in self.said if s.get("say") == "failed"]
+        self.assertEqual(["bad", "link"], [s["id"] for s in failed])
+        self.assertIn("changed after it was approved", failed[0]["why"])
+        self.assertIn("symbolic link", failed[1]["why"])
+        self.assertEqual([], self.journal.records)
+        self.assertEqual([], list((self.home / "channel" / "outbox").iterdir()))
+
+    def test_refused_upload_still_consumes_the_sequence_and_reports_failure(self):
+        def reply(route, body):
+            if route == "uploads":
+                return 422, {}, {}
+            if route == "records" and body.get("do") == "deliver":
+                self.assertNotIn("upload", body["files"][0])
+                return 422, {}, {}
+            return self.reply(route, body)
+
+        self.script = reply
+        self.core.accept({"do": "deliver", "id": "f", "place": "t9", "text": "x", "files": [self.approved()]})
+        self.core.accept({"do": "answered", "ref": "c", "text": "after"})
+        self.start("post")
+        self.until(lambda: self.core.cursor == 3)
+        self.assertEqual(["failed"], [s["say"] for s in self.said if s["say"] != "note"])
+
+    def test_busy_upload_is_retried_without_any_outcome(self):
+        answers = [(503, {}, {"Retry-After": "0"}),
+                   (201, {"upload": "00000000-0000-4000-8000-000000000002"}, {})]
+        self.script = lambda route, body: answers.pop(0) if route == "uploads" else self.reply(route, body)
+        self.core.accept({"do": "deliver", "id": "f", "place": "t9", "text": "x", "files": [self.approved()]})
+        self.start("post")
+        self.until(lambda: any(s.get("say") == "delivered" for s in self.said))
+        self.assertEqual([], [s for s in self.said if s.get("say") == "failed"])
+        self.assertEqual(2, len([c for c in self.calls if c[0] == "uploads"]))
+
+    def test_notice_fans_out_to_each_allowed_member_and_answers_once(self):
+        self.core.allowed = ["m1", "m2", "U9"]
+
+        def reply(route, body):
+            if route == "records" and body.get("to", {}).get("sender") == "m2":
+                return 403, {}, {}
+            return self.reply(route, body)
+
+        self.script = reply
+        self.core.accept({"do": "deliver", "id": "n-0", "place": "notices", "text": "back up",
+                          "notice": True, "reply_to": "77"})
+        self.start("post")
+        self.until(lambda: self.core.cursor == 3)
+        posted = self.records()
+        self.assertEqual([("n-0/m1", {"sender": "m1"}), ("n-0/m2", {"sender": "m2"})],
+                         [(r["id"], r["to"]) for r in posted])
+        for record in posted:
+            for absent in ("place", "reply_to", "of"):
+                self.assertNotIn(absent, record)
+        self.assertEqual([{"say": "delivered", "id": "n-0", "external_id": "message-1"}],
+                         [s for s in self.said if s["say"] in {"delivered", "failed"}])
+
+    def test_notice_nobody_received_fails_once_and_no_allowed_member_refuses(self):
+        self.core.allowed = ["m1", "m2"]
+        self.script = lambda route, body: (403, {}, {}) if route == "records" else self.reply(route, body)
+        self.core.accept({"do": "deliver", "id": "n", "place": "notices", "text": "x", "notice": True})
+        self.start("post")
+        self.until(lambda: self.core.cursor == 3)
+        outcomes = [s for s in self.said if s["say"] in {"delivered", "failed"}]
+        self.assertEqual([("failed", "n")], [(s["say"], s["id"]) for s in outcomes])
+        self.core.allowed = ["U1"]
+        self.core.accept({"do": "deliver", "id": "none", "place": "notices", "text": "x", "notice": True})
+        self.assertIn("no allowed Max member", self.said[-1]["why"])
+
+    def test_aimed_delivery_is_never_fanned_out_and_a_place_is_refused(self):
+        self.core.allowed = ["m1", "m2"]
+        self.core.accept({"do": "deliver", "id": "a", "place": "", "text": "x", "notice": True,
+                          "to": {"sender": "m2"}})
+        self.core.accept({"do": "deliver", "id": "b", "place": "", "text": "x", "to": {"place": "c4"}})
+        self.assertEqual([{"do": "deliver", "id": "a", "text": "x", "notice": True,
+                           "to": {"sender": "m2"}, "seq": 1}], self.journal.records)
+        self.assertEqual("b", self.said[-1]["id"])
+        self.assertIn("no place destinations", self.said[-1]["why"])
+
+    def test_child_thread_anchor_kept_only_for_a_run_attempt(self):
+        self.core.accept({"do": "deliver", "id": "t1", "place": "t9", "text": "x",
+                          "reply_to": "12.1", "threaded": "weekly"})
+        self.core.accept({"do": "deliver", "id": "t2", "place": "t9", "text": "x",
+                          "reply_to": "4401", "threaded": "weekly"})
+        first, second = self.journal.records
+        self.assertEqual(("12.1", "weekly"), (first["reply_to"], first["threaded"]))
+        self.assertNotIn("reply_to", second)
+        self.assertNotIn("threaded", second)
+
+    def test_delegation_records_are_journalled_and_posted_whole(self):
+        record = {"do": "delegation", "place": "t9", "state": "handed", "who": "dev",
+                  "ask": "del-41", "provider": "/opt/x/codex", "provider_alias": "work"}
+        self.core.accept(record)
+        self.start("post")
+        self.until(lambda: self.core.cursor == 2)
+        posted = self.records()[0]
+        self.assertEqual(dict(record, seq=1, stream=1), posted)
+
+
+class SearchAndFetch(Scripted):
+    def test_search_pages_to_limit_with_inclusive_days_and_maps_hits(self):
+        pages = [{"hits": [{"ref": "t9/3", "conversation": "t9", "user": "m1", "display": "Dana",
+                            "text": "invoice", "at": "2026-11-19T10:00:00+00:00", "link": "https://x/3"}],
+                  "before": "c1", "looked": {"messages": 4}},
+                 {"hits": [{"ref": "t9/1", "conversation": "t9", "user": "m1", "text": "invoice again",
+                            "at": "2026-11-18T10:00:00+00:00"}], "before": "c2", "looked": {"messages": 2}}]
+        self.script = lambda route, body: (200, pages.pop(0), {})
+        answer = self.max.search(self.client, {"words": "invoice", "place": "t9", "user": "m1",
+                                               "since": "2026-11-01", "until": "2026-11-19", "limit": 2})
+        self.assertTrue(answer["ok"])
+        self.assertEqual("", answer["partial"])
+        self.assertEqual({"messages": 6}, answer["looked"])
+        self.assertEqual({"who": "m1", "when": "2026-11-19T10:00:00+00:00", "text": "invoice",
+                          "ref": "t9/3", "display": "Dana", "link": "https://x/3",
+                          "external_place": "t9"}, answer["results"][0])
+        self.assertEqual("2026-11-19 23:59:59.999999", self.queries[0]["until"])
+        self.assertEqual("c1", self.queries[1]["before"])
+        self.assertEqual(["2", "1"], [q["limit"] for q in self.queries])
+
+    def test_search_refuses_scopes_max_cannot_read_and_says_when_it_stopped_early(self):
+        self.assertFalse(self.max.search(self.client, {"place": "c5"})["ok"])
+        self.assertFalse(self.max.search(self.client, {"user": "dana"})["ok"])
+        self.assertEqual([], self.calls)
+        self.script = lambda route, body: (503, {}, {"Retry-After": "5"})
+        busy = self.max.search(self.client, {"words": "x", "limit": 5})
+        self.assertTrue(busy["ok"])
+        self.assertIn("busy", busy["partial"])
+        self.assertEqual(1, len(self.calls))
+        page = {"hits": [], "before": "more", "looked": {"messages": 200}}
+        self.script = lambda route, body: (200, page, {})
+        ticks = iter([0, 0, 60])
+        spent = self.max.search(self.client, {"words": "x", "limit": 5}, clock=lambda: next(ticks))
+        self.assertIn("50 seconds", spent["partial"])
+        self.script = lambda route, body: (401, {}, {})
+        self.assertFalse(self.max.search(self.client, {"words": "x"})["ok"])
+
+    def test_fetch_rechecks_and_lands_each_file_at_its_own_position(self):
+        def reply(route, body):
+            if route == "messages/9/3/attachments":
+                return 200, {"attachments": [{"id": 1, "name": "a.txt", "bytes": 1},
+                                             {"id": 2, "name": "b.txt", "bytes": 2},
+                                             {"id": 3, "name": "c.txt", "bytes": 1}]}, {}
+            if route == "messages/9/3/attachments/1":
+                return 200, b"a", {"Content-Length": "1"}
+            if route == "messages/9/3/attachments/2":
+                return 403, {}, {}
+            return 200, b"c", {"Content-Length": "1"}
+
+        self.script = reply
+        answer = self.max.fetch(self.client, {"ref": "t9/3"}, self.home / "channel")
+        self.assertTrue(answer["ok"])
+        self.assertEqual("3", answer["message"])
+        landed = self.home / "channel" / "fetched" / "3"
+        self.assertEqual([str(landed / "0"), str(landed / "2")], [a["at"] for a in answer["attachments"]])
+        self.assertEqual(b"c", (landed / "2").read_bytes())
+        self.assertIn("HTTP 403", answer["partial"])
+        self.script = lambda route, body: (403, {}, {})
+        self.assertFalse(self.max.fetch(self.client, {"ref": "t9/4"}, self.home / "channel")["ok"])
+        self.assertFalse(self.max.fetch(self.client, {"ref": "c9/4"}, self.home / "channel")["ok"])
+
+    def test_search_invocation_reads_one_request_and_prints_one_answer(self):
+        self.script = lambda route, body: (200, {"hits": [], "before": None, "looked": {"messages": 0}}, {})
+        env = dict(os.environ, MAX_CHANNEL_SECRET="synthetic-secret",
+                   RUNDESK_SETTINGS=json.dumps({"endpoint": self.endpoint}))
+        out = subprocess.run([sys.executable, "-B", str(support.CHECKOUT / "src" / "channels" / "max"),
+                              "search"], input='{"words": "x", "place": "", "user": "", "since": "", '
+                             '"until": "", "limit": 3}', capture_output=True, text=True, timeout=20, env=env)
+        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertEqual({"ok": True, "results": [], "partial": "", "looked": {"messages": 0}},
+                         json.loads(out.stdout))
 
 
 if __name__ == "__main__":

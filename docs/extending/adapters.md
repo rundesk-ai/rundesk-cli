@@ -1,9 +1,8 @@
 # Writing a channel adapter
 
 **This is what ships.** Every claim on this page was read out of the code as it stands: where it
-states a field, a bound or an exit code, it is because `src/rundesk/channels/`, the two working
-adapters in `src/channels/discord` and `src/channels/slack`, the core Max transport in
-`src/channels/max`, and the suites in `tests/` say so. Where the code and its own
+states a field, a bound or an exit code, it is because `src/rundesk/channels/`, the shipped
+adapters in `src/channels/discord`, `src/channels/slack` and `src/channels/max`, and the suites in `tests/` say so. Where the code and its own
 docstrings disagree, the code is what is written here and the disagreement is named.
 
 [`research/the-adapter-contracts.md`](../research/the-adapter-contracts.md) reproduces the contract the
@@ -44,7 +43,7 @@ different process.
 | any path with a separator in it | yours, right now, wherever you are writing it |
 
 **A bare name resolves among the shipped ones first and then among the given ones**; anything with a
-separator is used as a path and is expanded for `~`. So `discord`, `slack` and the core `max` adapter
+separator is used as a path and is expanded for `~`. So `discord`, `slack` and `max`
 ship, `my-thing` is one somebody dropped into `data/adapters/`, and
 `/Users/me/work/thing` is one being written this afternoon and installed nowhere.
 
