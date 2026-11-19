@@ -915,13 +915,28 @@ class ScriptedParity(Scripted):
         self.until(lambda: list((self.home / "channel" / "outbox").iterdir()) == [])
 
     def test_paused_binding_is_retried_without_consuming_or_answering(self):
-        answers = [(423, {}, {"Retry-After": "0"}), (201, {"id": "m"}, {})]
-        self.script = lambda route, body: answers.pop(0) if route == "records" else self.reply(route, body)
-        self.core.accept({"do": "deliver", "id": "p", "place": "t9", "text": "x"})
+        self.core.idle_poll = 0.01
+        off = (403, {"message": "Forbidden.", "binding": "inactive"}, {})
+        answers = {"uploads": [off, (201, {"upload": "00000000-0000-4000-8000-000000000009"}, {})],
+                   "records": [off, (201, {"id": "m"}, {})]}
+        self.script = lambda route, body: answers[route].pop(0) if route in answers else self.reply(route, body)
+        self.core.accept({"do": "deliver", "id": "p", "place": "t9", "text": "x", "files": [self.approved()]})
         self.start("post")
         self.until(lambda: self.core.cursor == 2)
         self.assertEqual([{"say": "delivered", "id": "p", "external_id": "m"}],
                          [s for s in self.said if s["say"] in {"delivered", "failed"}])
+        self.assertEqual(2, len([c for c in self.calls if c[0] == "records"]))
+
+    def test_paused_binding_keeps_polling_and_holds_runs(self):
+        off = (403, {"message": "Forbidden.", "binding": "inactive"}, {})
+        self.script = lambda route, body: off
+        self.start("poll")
+        self.until(lambda: len([c for c in self.calls if c[0] == "inbox"]) >= 2)
+        self.assertFalse(self.core.stopped.is_set())
+        self.assertFalse(self.core.inbox({"runs": [{"run": 2, "attempt": 1, "text": "x"}]}))
+        self.assertIn("2.1", self.core.pending)
+        self.assertEqual({"ok": False, "why": self.max.PAUSED_WHY},
+                         self.max.search(self.client, {"words": "x"}))
 
     def test_snapshot_destination_failure_is_a_refusal_not_a_double_close(self):
         said = self.approved()

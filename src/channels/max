@@ -288,6 +288,12 @@ class Client:
             if response.code != 200:
                 if response.code == 429 or response.code >= 500:
                     raise OSError("Max deferred a file (HTTP %d)" % response.code)
+                try:
+                    said = json.loads(response.read(64 * 1024) or b"{}")
+                except (ValueError, UnicodeError):
+                    said = {}
+                if paused(response.code, said if isinstance(said, dict) else {}):
+                    raise OSError(PAUSED_WHY)
                 raise Refused("Max refused a file (HTTP %d)" % response.code)
             at.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             written = 0
@@ -409,6 +415,15 @@ def a_snapshot(said: Any, into: Path) -> Dict[str, Any]:
     # The name is rundesk's own; taken as a bare name because a separator would pretend to be a path.
     return {"name": Path(str(said.get("name") or path.name)).name, "bytes": expected,
             "sha256": wanted}
+
+
+#: What a refusal of the whole binding says; it consumes nothing, so the work waits and retries.
+PAUSED_WHY = "Max Chat is switched off for this agent right now"
+
+
+def paused(status: int, body: Dict[str, Any]) -> bool:
+    """Whether Max refused the whole binding (Chat switched off), as opposed to one item."""
+    return status == 403 and body.get("binding") == "inactive"
 
 
 def retry_after(headers: Dict[str, str]) -> float:
@@ -589,6 +604,8 @@ class Core:
                 raise Superseded("Max binding revoked while staging a file")
             if status == 429 or status >= 500:
                 raise Deferred(retry_after(headers))
+            if paused(status, body):
+                raise Deferred(self.idle_poll)
             if status != 201 or not isinstance(body.get("upload"), str):
                 self.note("Max refused a file for delivery %s (HTTP %d)" % (row.get("id"), status))
                 return None
@@ -682,6 +699,9 @@ class Core:
                         raise Superseded("pending stream allocation was superseded")
                     if status in {401, 410}:
                         raise Superseded("Max binding revoked or stream superseded")
+                    if paused(status, body):
+                        self.stopped.wait(self.idle_poll)
+                        continue
                     if status != 200:
                         if 400 <= status < 500:
                             self.fail(1, "Max refused stream allocation (HTTP %d)" % status)
@@ -723,9 +743,11 @@ class Core:
                     continue
                 if status == 409 and "current_stream" in body:
                     raise Superseded("Max stream no longer matches this journal")
-                if status in {423, 429}:
-                    # 423: the binding is paused (Chat switched off); nothing was consumed.
+                if status == 429:
                     self.stopped.wait(retry_after(headers))
+                elif paused(status, body):
+                    # The whole binding was refused before its sequence was considered.
+                    self.stopped.wait(self.idle_poll)
                 elif 200 <= status < 300 or 400 <= status < 500:
                     if row["do"] == "deliver":
                         if status in {200, 201} and body.get("id") is not None:
@@ -768,6 +790,8 @@ class Core:
                         delay = self.active_poll if fresh or self.open_work or self.pending else self.idle_poll
                 elif status == 503 or status >= 500 or status == 429:
                     delay = retry_after(headers)
+                elif paused(status, body):
+                    delay = self.idle_poll
                 else:
                     self.fail(1, "Max refused inbox (HTTP %d)" % status)
             except Superseded as why:
@@ -796,12 +820,12 @@ class Core:
                 due, tries = self.pending.get(receipt, (0.0, 0))
                 if due > now:
                     continue
-            status, _result, headers = self.client.request(
+            status, result, headers = self.client.request(
                 "POST", "claim", {"run": run["run"], "attempt": run["attempt"]})
             if status in {401, 410}:
                 raise Superseded("Max binding revoked while claiming")
             if status != 200:
-                if status >= 500 or status == 429:
+                if status >= 500 or status == 429 or paused(status, result):
                     with self.lock:
                         self.pending[receipt] = (now + retry_after(headers), tries)
                 continue
@@ -961,6 +985,11 @@ def search(client: Client, asked: Dict[str, Any],
         if status == 429 or status >= 500:
             partial = "Max was busy (HTTP %d) before the search finished; ask again shortly" % status
             break
+        if paused(status, body):
+            if not results:
+                return {"ok": False, "why": PAUSED_WHY}
+            partial = PAUSED_WHY
+            break
         if status != 200:
             if not results:
                 return {"ok": False, "why": "Max refused the search (HTTP %d)" % status}
@@ -1008,6 +1037,8 @@ def fetch(client: Client, asked: Dict[str, Any], home: Path,
         return {"ok": False, "why": "Max could not be reached (%s)" % type(why).__name__}
     if status in {401, 410}:
         return {"ok": False, "why": "the Max binding was revoked; reconnect the channel"}
+    if paused(status, body):
+        return {"ok": False, "why": PAUSED_WHY}
     if status == 403:
         return {"ok": False, "why": "Max will not show that message to this agent now"}
     if status != 200:

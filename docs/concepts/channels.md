@@ -136,7 +136,10 @@ Inbox reads are short polls, with one outstanding request: three seconds after a
 or fresh poll, fifteen seconds when idle. A bodyless `204` is a successful heartbeat. Posting and
 stdin draining run independently, so a delayed post cannot block a steering message or Stop.
 Work has no timer that ends it. Retryable posting failures keep the same journal record and earn
-no delivery acknowledgement; `423` (a paused binding) is retried like `429`. Revocation (`401`) and supersession (`410`, or an allocation conflict)
+no delivery acknowledgement. A `403` marked `"binding": "inactive"` refuses the whole binding
+(Chat switched off) and consumes nothing: polling continues at the idle pace, posts, uploads, claims
+and downloads wait and retry, and search and fetch say Chat is switched off. Any other `403` refuses
+one item. Revocation (`401`) and supersession (`410`, or an allocation conflict)
 exit `78`.
 
 Each outbound record is fsynced before posting, then sent in sequence on a Max-allocated stream.
