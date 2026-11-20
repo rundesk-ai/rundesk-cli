@@ -192,6 +192,34 @@ class TestOnlyKillPoint(ReceivingOnAChannel):
         # The stub claims nothing, so the unclaimed first message is found again beside the second.
         self.assertEqual(["t1", "t1", "t2"], [one[2] for one in self.answered])
 
+    def test_a_sweep_right_after_the_marker_is_made_starts_no_turn(self):
+        swept = []
+
+        def killed(*_args):
+            # The marker is closed and the kill not yet delivered: the instant a sweep that read
+            # only the marker would admit the channel and start the turn the kill must leave.
+            self.assertTrue(self.marker.exists())
+            self.sweep()
+            swept.append(len(self.answered))
+            raise SystemExit("killed")
+
+        self.kill_at(hosting.AFTER_RECORD)
+        with mock.patch("os.kill", side_effect=killed):
+            with self.assertRaises(SystemExit):
+                self.receive()
+        self.assertEqual([0], swept)
+        self.assertEqual([], self.answered)
+
+    def test_after_a_marker_that_cannot_be_made_the_sweep_recovers_an_older_message(self):
+        arriving.recorded(self.agent, "test", "t-old", "m1", "earlier", "1.1")
+        self.marker.parent.rmdir()
+        self.kill_at(hosting.AFTER_RECORD)
+        with mock.patch("os.kill") as kill:
+            self.receive(receipt="r2", conversation="t-new", external_id="2.1")
+            self.sweep()
+        kill.assert_not_called()
+        self.assertIn("t-old", [one[2] for one in self.answered])
+
     def test_a_redelivery_never_fires_the_point(self):
         self.receive()
         self.kill_at(hosting.AFTER_RECORD)

@@ -86,7 +86,7 @@ import signal
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional, Protocol, Sequence
+from typing import Any, Dict, List, NamedTuple, Optional, Protocol, Sequence, Set, Tuple
 
 from rundesk.agents import directory
 from rundesk.channels import adapters, arriving, credentials, kept
@@ -119,6 +119,13 @@ WILL_NOT_START = "will-not-start.json"
 KILL_AT = "RUNDESK_TEST_KILL_AT"
 #: The gateway's own point: after a fresh message is recorded and its receipt said, before a turn.
 AFTER_RECORD = "gateway-after-record"
+#: **Test only.** This process's kill points, by `(channel, point)`, between arming and the kill
+#: (`_TEST_KILLING`) and never to fire here (`_TEST_KILL_INERT`, its marker could not be made). The
+#: pending sweep reads both under `_TEST_KILL_LOCK`, the lock arming takes, so it never sees the
+#: marker this process just made while the kill is still on its way.
+_TEST_KILL_LOCK = threading.Lock()
+_TEST_KILLING: Set[Tuple[Path, str]] = set()
+_TEST_KILL_INERT: Set[Tuple[Path, str]] = set()
 
 #: When an adapter's error file is worth moving aside, and how many are kept. The same shape and the
 #: same reasoning as everywhere else: a channel that reconnects noisily for a week must not be able
@@ -1590,9 +1597,21 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any],
 
 
 def _armed_for_a_test(channel: Path, point: str) -> bool:
-    """**Test only:** whether `KILL_AT` names `point` and its marker has not been made yet."""
-    return (os.environ.get(KILL_AT, "") == point
-            and not os.path.lexists(channel / f"test-kill-{point}.fired"))
+    """**Test only:** whether `KILL_AT` names `point` and this process may still fire it.
+
+    Armed from the moment the point is named until this process has killed itself: while its marker
+    is missing, and while this process is between making that marker and the kill. A marker found
+    otherwise was left by a process the point already killed, and one this process could not make
+    leaves the point inert; either way the sweep runs normally.
+    """
+    if os.environ.get(KILL_AT, "") != point:
+        return False
+    with _TEST_KILL_LOCK:
+        if (channel, point) in _TEST_KILLING:
+            return True
+        if (channel, point) in _TEST_KILL_INERT:
+            return False
+        return not os.path.lexists(channel / f"test-kill-{point}.fired")
 
 
 def _killed_for_a_test(channel: Path, point: str) -> None:
@@ -1604,11 +1623,17 @@ def _killed_for_a_test(channel: Path, point: str) -> None:
     """
     if os.environ.get(KILL_AT, "") != point:
         return
-    try:
-        os.close(os.open(str(channel / f"test-kill-{point}.fired"),
-                         os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
-    except OSError:
-        return
+    with _TEST_KILL_LOCK:
+        if (channel, point) in _TEST_KILL_INERT:
+            return
+        _TEST_KILLING.add((channel, point))
+        try:
+            os.close(os.open(str(channel / f"test-kill-{point}.fired"),
+                             os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        except OSError:
+            _TEST_KILLING.discard((channel, point))
+            _TEST_KILL_INERT.add((channel, point))
+            return
     os.kill(os.getpid(), signal.SIGKILL)
 
 
