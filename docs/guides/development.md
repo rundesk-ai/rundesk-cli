@@ -180,7 +180,9 @@ environment.
 
 Each point first creates `channels/<kind>/test-kill-<value>.fired` exclusively, then kills. It
 stays inert while that marker exists, so a restarted process carries on, and it stays inert if the
-marker cannot be made. Set it only on a disposable `RUNDESK_HOME`.
+marker cannot be made. While `gateway-after-record` is named and has not fired, the gateway's
+pending sweep leaves that channel alone, so no turn starts between the record and the kill. Set it
+only on a disposable `RUNDESK_HOME`.
 
 ## A test is unproven until you have watched it fail
 

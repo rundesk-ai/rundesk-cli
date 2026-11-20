@@ -641,8 +641,12 @@ def looked(agent: str, where: Path, watching: Watching,
 
 def _answered_pending(agent: str, watching: Watching, answering: Answering) -> None:
     """Recover messages whose original gateway ended before a turn could claim them."""
+    # A channel whose test-only F4 point is armed is left alone until it fires: its listener has
+    # committed the message and is on its way to the kill, and a turn started here in that window
+    # would be killed with it instead of left for the replacement gateway this point exists to test.
     connected = tuple(kind for kind, running in watching.running.items()
-                      if running.connected is not None and running.connected.is_set())
+                      if running.connected is not None and running.connected.is_set()
+                      and not _armed_for_a_test(at(agent, kind), AFTER_RECORD))
     after, started, conversations_started = 0, 0, set()
     while started < PENDING_STARTED_AT_MOST:
         pending_page = arriving.pending_on_channels(
@@ -1583,6 +1587,12 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any],
     # **Handed on, never run here.** This is the thread reading one adapter's output, and a turn
     # takes minutes — see `Answering`.
     one.answering.answer(agent, kind, place, who, body, external, landed)
+
+
+def _armed_for_a_test(channel: Path, point: str) -> bool:
+    """**Test only:** whether `KILL_AT` names `point` and its marker has not been made yet."""
+    return (os.environ.get(KILL_AT, "") == point
+            and not os.path.lexists(channel / f"test-kill-{point}.fired"))
 
 
 def _killed_for_a_test(channel: Path, point: str) -> None:

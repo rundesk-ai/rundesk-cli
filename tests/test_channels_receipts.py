@@ -149,6 +149,49 @@ class TestOnlyKillPoint(ReceivingOnAChannel):
         self.assertEqual(1, kill.call_count)
         self.assertEqual(1, len(self.answered))
 
+    def sweep(self):
+        """One pass of the gateway's own pending sweep over this connected channel."""
+        connected = threading.Event()
+        connected.set()
+        watching = hosting.Watching({"test": SimpleNamespace(connected=connected)}, {}, {})
+        hosting._answered_pending(self.agent, watching, self.one.answering)
+
+    def test_the_sweep_starts_no_turn_between_the_receipt_and_the_kill(self):
+        swept = []
+        receipt = hosting._received
+
+        def received_then_swept(*args):
+            receipt(*args)
+            self.sweep()
+            swept.append(len(self.answered))
+
+        def killed(*_args):
+            raise SystemExit("killed")
+
+        self.kill_at(hosting.AFTER_RECORD)
+        with mock.patch.object(hosting, "_received", side_effect=received_then_swept), \
+                mock.patch("os.kill", side_effect=killed):
+            with self.assertRaises(SystemExit):
+                self.receive()
+        self.assertEqual([0], swept)
+        self.assertEqual([], self.answered)
+        self.assertEqual(["accepted"], [one["outcome"] for one in self.receipts()])
+
+    def test_the_sweep_recovers_the_message_once_the_point_fired_or_is_unset(self):
+        arriving.recorded(self.agent, "test", "t1", "m1", "hello", "1.1")
+        self.kill_at(hosting.AFTER_RECORD)
+        self.sweep()
+        self.assertEqual([], self.answered)
+        self.marker.touch()
+        self.sweep()
+        self.assertEqual(1, len(self.answered))
+        self.marker.unlink()
+        self.kill_at(None)
+        arriving.recorded(self.agent, "test", "t2", "m1", "again", "2.1")
+        self.sweep()
+        # The stub claims nothing, so the unclaimed first message is found again beside the second.
+        self.assertEqual(["t1", "t1", "t2"], [one[2] for one in self.answered])
+
     def test_a_redelivery_never_fires_the_point(self):
         self.receive()
         self.kill_at(hosting.AFTER_RECORD)
