@@ -97,5 +97,5 @@ Three files at the root — `README.md`, `BRIEF.md`, `CODEMAP.md` — and every 
 `slack_sdk` for `src/channels/slack`, and nothing under `src/rundesk/` imports either. `ruff.toml` — the development and CI lint contract,
 never a product dependency. `cli-versions.lock` — which vendor CLI version each shipped adapter was
 written against, and the captured stream that stands in for it so no suite needs an account or a
-network. `.github/workflows/build.yml` — the suites across `ubuntu-latest` and `macos-latest` on
+network. `.github/workflows/build.yml` — the suites across `ubuntu-24.04` and `macos-latest` on
 Python 3.9 and 3.13, plus a Ruff job.
