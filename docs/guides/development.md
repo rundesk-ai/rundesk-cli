@@ -185,6 +185,11 @@ pending sweep leaves that channel alone, so no turn starts between the record an
 the instant after the marker is made. A marker that cannot be made returns the channel to the sweep
 at once. Set it only on a disposable `RUNDESK_HOME`.
 
+`gateway-after-record` assumes one listener per channel. If the adapter is replaced during an F4 run,
+the old listener can still answer its message, so an F4 run must not restart the adapter. The E
+runner's guard voids any run where this happens: it requires zero turns, and Max's run still at
+`seen`, between the kill and the restart.
+
 ## A test is unproven until you have watched it fail
 
 Break the code, run the suite, see red, put the code back. A green test that would stay green with
