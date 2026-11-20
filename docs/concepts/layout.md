@@ -117,6 +117,18 @@ hand. So a stray directory is not listed as an agent and cannot be operated on a
 interrupted `agents add` leaves litter rather than something wearing an agent's name and not being
 one.
 
+The Max adapter keeps its ordered outbox in `channels/max/journal/`: atomically replaced
+`stream.json` holds `{nonce, supersede, stream}` (null stream means allocation pending), and
+fsynced `records.jsonl` retains the sequenced records for retry and server-requested rewind.
+An exclusive flock on that exact directory lasts for the adapter process. These are adapter-owned
+files, independent of the agent record schema. Malformed headers or damaged record files are moved
+to `journal/damaged-<n>/` before a new allocation; unreadable files remain untouched. Neither path
+deletes the retained records. Updates do not replace them, and copies carry them with channel data.
+Outbound file snapshots stand in `channels/max/outbox/<id>/<n>` until no unsent record names them.
+Fetched files stand in `channels/max/fetched/<message>/<n>` until Rundesk takes or refuses them.
+A test-only kill point leaves `channels/<kind>/test-kill-<point>.fired` when it fires; nothing makes
+one unless `RUNDESK_TEST_KILL_AT` is set (see `docs/guides/development.md`).
+
 The configuration row in `state.db` also keeps this agent's outbound delegation scope as a nullable
 JSON array. `NULL` means the default, any other available agent; `[]` means none, making this agent
 inbound-only for named-agent work; and a non-empty array is the exact allowlist. The setting changes
@@ -236,6 +248,11 @@ it lives; `record.json`, which process it is; `stderr.log`, what it wrote that w
 trying to start it. The last is what `channels show` and `channels doctor` read to tell a channel
 that was given up on from one whose gateway is simply not running, and it is removed the moment
 something starts that channel again.
+
+Correlated channel work is process-local in the provider layer. Registration, ended/removal and
+snapshot sampling share one in-memory registry lock per agent/channel, always acquired before the
+adapter's pipe-write lock. No registry file or migration is needed; after a gateway restart,
+inherited unfinished work is read from the existing turn and conversation-message rows.
 
 It is one of the two directories a migration does not copy aside and put back, along with `logs/`:
 both grow without bound, and putting a lock file back underneath a child that is still running would

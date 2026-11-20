@@ -1,8 +1,8 @@
 # Writing a channel adapter
 
 **This is what ships.** Every claim on this page was read out of the code as it stands: where it
-states a field, a bound or an exit code, it is because `src/rundesk/channels/`, the two working
-adapters in `src/channels/discord` and `src/channels/slack`, and the suites in `tests/` say so. Where the code and its own
+states a field, a bound or an exit code, it is because `src/rundesk/channels/`, the shipped
+adapters in `src/channels/discord`, `src/channels/slack` and `src/channels/max`, and the suites in `tests/` say so. Where the code and its own
 docstrings disagree, the code is what is written here and the disagreement is named.
 
 [`research/the-adapter-contracts.md`](../research/the-adapter-contracts.md) reproduces the contract the
@@ -43,7 +43,7 @@ different process.
 | any path with a separator in it | yours, right now, wherever you are writing it |
 
 **A bare name resolves among the shipped ones first and then among the given ones**; anything with a
-separator is used as a path and is expanded for `~`. So `discord` and `slack` are the adapters that
+separator is used as a path and is expanded for `~`. So `discord`, `slack` and `max`
 ship, `my-thing` is one somebody dropped into `data/adapters/`, and
 `/Users/me/work/thing` is one being written this afternoon and installed nowhere.
 
@@ -153,7 +153,7 @@ an adapter that cannot edit a message is told apart from one that can and did no
 That is the shipped Discord adapter's answer, and it is a fair template. **Be honest about what is in
 it**, and know what it costs today: rundesk asks the question, prints the answer on the `can` line of
 `channels add`, and **keeps none of it** — the `channels` table has no column for it, so `channels
-show` has nothing to show. Three keys are read: `max_text`, `stream`, and
+show` has nothing to show. Four keys are read: `max_text`, `stream`, `work`, and
 [`address`](#address-decides-whether-a-destination-may-be-named). See
 [what is not built yet](#what-is-not-built-yet).
 
@@ -252,6 +252,7 @@ two credentials is still an adapter that declares two names.
 | `RUNDESK_ALLOW` | which **senders** may reach this agent here, comma separated |
 | `RUNDESK_ALLOW_PLACES` | which **places** anybody may reach it from, comma separated. Empty, or absent, where none was named |
 | each name from `secret.env` | its value, out of the install's sealed store — kept under `<NAME>__<AGENT>` and nowhere else, and always handed over as `<NAME>`. A name nothing is kept under is left out rather than set empty, and a plain `<NAME>` is never read |
+| `RUNDESK_TEST_KILL_AT` | **test only**, and absent unless the gateway itself was started with it set and non-empty. See [Test-only kill points](../guides/development.md#test-only-kill-points); an adapter with no point of its own ignores it |
 
 **stdin** is a pipe and is readable: records come in, one JSON object per line. **stdout** is a pipe
 and is drained continuously by a thread of the gateway's — records go out the same way. **stderr** is
@@ -455,6 +456,7 @@ for goes to stderr; see [the rules](#the-rules-that-will-bite).
 | `text` | required unless `attachments` | what was said. Clipped at 64 KiB rather than refused |
 | `attachments` | required unless `text` | what they attached, already fetched onto this machine — see below |
 | `external_id` | optional | the platform's own id for this message. **Without it there is no redelivery guard and no `seen` mark** |
+| `receipt` | optional | nonempty string, at most 64 characters; requests one recording outcome before answering starts |
 | `display` | optional | what the platform calls the person speaking. Reaches the brain, so an agent in a room can address somebody by name |
 | `mention` | optional | **your platform's own markup for mentioning the speaker** — `<@U012ABCDEF>` on Slack, `<@123456789012345678>` on Discord. It reaches the brain beside the name with one instruction: it is for mentioning that person and is never said as words, and the bare id never reaches a prompt at all. One token, at most 64 characters, or rundesk drops it rather than teaching half a handle. Send only a handle your own `deliver` path carries to the platform as a real mention |
 | `where` | optional | **one ordinary sentence** saying where this was said — `a direct message`, `the ops room in Acme`. Rundesk never parses it and never names a room itself; what a place is called is the one thing only you know |
@@ -500,6 +502,23 @@ nothing is recorded.
 nothing the second time, because the message lands once. Without it, two identical lines are two
 things somebody said. The previous build had the column and the index and no adapter ever passed an
 id through the seam, so the guard was correct and prevented nothing.
+
+**`receipt` optionally asks for a recording outcome.** Supply a nonempty string of at most 64
+characters. Rundesk writes one `{"do":"received","receipt":"…","outcome":"…"}` back to
+that adapter before starting the answer thread. Missing, empty, non-string and overlong tokens are
+ignored, never clipped. Adapters that supply no receipt receive the existing records alone.
+
+| Outcome | Recorded fact |
+|---|---|
+| `refused` | the sender and external place were not admitted; nothing was recorded |
+| `invalid` | no conversation, or neither text nor attachments; nothing was recorded |
+| `empty` | files only, and no file could be taken in; nothing was recorded |
+| `accepted` | the new message was committed |
+| `duplicate` | that external message was already committed in this conversation |
+
+An exception while taking in files or recording earns no receipt: the adapter may redeliver with
+the same `external_id`. A receipt says nothing about whether a provider turn started or finished.
+It is a pipe write, with no durable gateway outbox; an adapter that misses it may redeliver safely.
 
 Each entry of `attachments`:
 
@@ -553,7 +572,8 @@ are still not asked for; nothing reads a member list or a presence.
 
 ### What an adapter is told — `do:`
 
-Five, and only five exist today.
+Eight record kinds exist today. `received` is sent only when an `arrived` supplies a valid receipt;
+`work` is sent only to an adapter declaring `"work": true` in its capabilities.
 
 ```json
 {"do": "deliver", "id": "1754431200.123456-0-7", "place": "1180", "text": "Three files changed…",
@@ -573,6 +593,9 @@ Five, and only five exist today.
 {"do": "delegation", "place": "1180", "state": "answered", "who": "dev", "ask": "del-41-4e07c5",
  "elapsed": "1m", "provider": "claude", "provider_alias": "work"}
 {"do": "answered", "ref": "c-91f2", "text": "3 schedules, next at 09:00"}
+{"do": "received", "receipt": "r1", "outcome": "accepted"}
+{"do": "work", "work": "gateway-token:1", "place": "1180", "for": "8841",
+ "ended": "answered", "marked": "8841", "state": "done"}
 {"do": "stop"}
 ```
 
@@ -583,6 +606,8 @@ Five, and only five exist today.
 | `activity` | `place`, `did`, sometimes `ok`, sometimes `who` | show what the agent is doing, while it is still doing it |
 | `delegation` | `place`, `state`, `who`, `ask`, sometimes `elapsed`, sometimes `provider` and with it sometimes `provider_alias` | show what became of work this agent handed to another agent, which brain is doing it, and what has just been done to it |
 | `answered` | `ref`, `text` | the answer to a `control`, `query` or `configure` you sent, against the `ref` you gave it |
+| `received` | `receipt`, `outcome` | the recording outcome for an `arrived` that requested a receipt; never a provider outcome |
+| `work` | ended-work metadata or a snapshot | recover correlated work across adapter replacement; see below |
 | `stop` | — | stop. The signals follow either way |
 
 **A long answer arrives as several `deliver` records, and `files` go with the last of them.** The
@@ -772,6 +797,11 @@ adapter, and a line invented to cover a word you do not understand is worse than
 
 #### The turn states
 
+Each producer's `working` and terminal records carry the same `work` id, of the form
+`<random gateway token>:<counter>`. A channel-message producer also carries `for`, its original
+external message id, on `working`. Retries reuse the id; a Stop command's marks have no work id.
+Adapters that do not declare `work` can ignore these extra state fields.
+
 **`seen`, `working`, `done`, `stopped`, `failed`** — and not `taken`, `running`, `finished`, which is
 what the previous build's contract published and what nothing here speaks.
 
@@ -803,6 +833,30 @@ terminal state, and put a mark up only when one names a message.**
 **Put the new mark up before taking the old one down.** A message with no mark for a moment reads as
 a turn nobody picked up, and the order is the only thing that decides which of those somebody sees.
 If the new one will not go up, the old one staying is the failure to prefer.
+
+#### Recovering correlated work
+
+Declaring `"work": true` opts into two `do: work` records. Capabilities are read once per channel
+kind for the gateway's lifetime.
+
+| Record | Fields and meaning |
+|---|---|
+| Ended | `work`, `place`, `for` (external message id or null), `began`, `ended`, `marked`, `state`. Sent once from the producer's final cleanup, after its terminal, if an adapter is available. `ended` is `answered`, `joined`, `pending`, or `failed`. `marked` and `state` are non-null only when that producer's terminal named a message; admission refusal, busy-pending, joined, delegation and continuation endings name none. |
+| Snapshot | `gateway`, `open: [{work, place, for, began}]`, `inherited: [{place, activity, turns: [{turn, for, began}]}]`, `truncated`. Sent at each `ready` and after a gateway loop pass detects changed inherited membership or activity. At most 200 open/inherited entries in total; `truncated: true` means absence cannot establish that an omitted item ended. |
+
+`open` lists this process's live producers, including work whose first state was sent while the
+adapter was down. `inherited` lists only turns that were unfinished at gateway startup and remain
+unfinished. Each conversation has one activity class: `here` means this process owns its claim;
+`free` means no process owns it; `elsewhere` means another process owns it, with no claim about which
+turn that process is running; `unknown` means the claim could not be checked. An inherited turn
+disappears only after its durable row stops being unfinished. `for` is its first user message with
+an external id, or null.
+
+Registry registration plus first state, ended plus removal, and snapshot sampling plus writing
+each hold the same per-channel registry lock, before the adapter's pipe-write lock. Thus a snapshot
+cannot list work after its ended record. A separate snapshot worker samples and writes; the stdout
+reader only signals it at `ready`. Work that starts and finishes entirely while the adapter is down
+cannot be recovered from this process-local registry.
 
 ## The rules that will bite
 

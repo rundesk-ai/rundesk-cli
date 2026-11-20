@@ -240,11 +240,13 @@ class LifecycleContinuations(support.Isolated):
                 mock.patch.object(hosting, "marked", return_value=True) as marked:
             answerer._resumed(self.agent, handoff.id)
 
+        work = marked.call_args_list[0].kwargs["work"]
+        self.assertTrue(work)
         self.assertEqual(
             [mock.call(self.agent, directory.logs(self.agent), mock.ANY,
-                       "discord", "1180", answering.WORKING),
+                       "discord", "1180", answering.WORKING, None, work=work, work_for=None),
              mock.call(self.agent, directory.logs(self.agent), mock.ANY,
-                       "discord", "1180", answering.DONE)],
+                       "discord", "1180", answering.DONE, None, work=work, work_for=None)],
             marked.call_args_list)
 
     def test_an_admitted_continuation_failure_stops_the_channel_state(self):
@@ -264,9 +266,14 @@ class LifecycleContinuations(support.Isolated):
                 mock.patch.object(hosting, "marked", return_value=True) as marked:
             answerer._resumed(self.agent, handoff.id)
 
+        work = marked.call_args_list[0].kwargs["work"]
+        self.assertTrue(work)
         self.assertEqual(
-            [answering.WORKING, answering.FAILED],
-            [one.args[-1] for one in marked.call_args_list])
+            [mock.call(self.agent, directory.logs(self.agent), mock.ANY,
+                       "discord", "1180", answering.WORKING, None, work=work, work_for=None),
+             mock.call(self.agent, directory.logs(self.agent), mock.ANY,
+                       "discord", "1180", answering.FAILED, None, work=work, work_for=None)],
+            marked.call_args_list)
 
     def test_a_suppressed_continuation_never_starts_channel_state(self):
         kept.finish_turn(self.agent, self.turn, kept.DONE, {})

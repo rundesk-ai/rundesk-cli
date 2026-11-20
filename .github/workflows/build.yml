@@ -28,7 +28,7 @@ jobs:
         # The oldest Python a fresh macOS ships is the floor everything is written against, and a
         # current one catches what only a newer interpreter minds. Both systems, because an install
         # is a thing that happens to a machine.
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-24.04, macos-latest]
         python: ['3.9', '3.13']
     steps:
       - uses: actions/checkout@v7
@@ -65,7 +65,7 @@ jobs:
 
   style:
     name: how the code is written
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
@@ -93,7 +93,7 @@ jobs:
     # there was nobody who could merge past it either. Renaming here rather than loosening the
     # protection: the gate is what the branch asks for, and it is this file that had it wrong.
     name: required PR gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [tests, style]
     steps:
       - run: echo "every required job passed"

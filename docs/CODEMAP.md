@@ -54,15 +54,14 @@ Numbered, discovered, and **immutable once shipped** — never renumbered, renam
 agent steps run from `0001_the_records_an_agent_keeps` to
 `0014_where_one_schedule_reports`. The lifecycle registry exists and holds no shipped step yet.
 
-## Adapters (src/ — 6)
+## Adapters (src/ — 7)
 
 Executables with a shebang and no `.py`, run as separate programs exchanging newline-delimited JSON.
-Being extensionless is why a directory-scanning lint does not see them. A channel adapter answers
+Being extensionless is why a directory-scanning lint does not see them. A full channel adapter answers
 five invocations: `--capabilities`, `--check` and `serve` for the owner and the gateway, and `search`
 and `fetch` for the agent itself. One of them answers a sixth nobody else says: `src/channels/slack`
 runs itself as `upload`, because a file has a deadline and only a process can be held to one.
-
-- `src/channels/` — `discord`, `slack`
+- `src/channels/` — `discord`, `slack`, `max`
 - `src/providers/` — `codex`, `claude`, `grok`, `antigravity`
 
 ## Shipped artifacts (src/ — 2 trees)
@@ -72,7 +71,7 @@ runs itself as `upload`, because a file has a deadline and only a process can be
 | `src/skills/` | the bundled `rundesk` catalog: `manifest.json` and 3 packages — `delegating-work`, `managing-rundesk`, `writing-skills` |
 | `src/templates/` | the agent home: an `AGENTS.md`/`CLAUDE.md` pair placed from one source, `MEMORY.md`, and purpose-named area templates for plans, research, retros, scripts, and tasks |
 
-## Tests (tests/ — 89 suites, 3 support modules)
+## Tests (tests/ — 92 suites, 3 support modules)
 
 Directly runnable `unittest` suites. `tests/support.py` gives every case a temporary root, asserts
 that Rundesk resolved that root before the case runs, and points the proxy variables at a closed port
@@ -98,5 +97,5 @@ Three files at the root — `README.md`, `BRIEF.md`, `CODEMAP.md` — and every 
 `slack_sdk` for `src/channels/slack`, and nothing under `src/rundesk/` imports either. `ruff.toml` — the development and CI lint contract,
 never a product dependency. `cli-versions.lock` — which vendor CLI version each shipped adapter was
 written against, and the captured stream that stands in for it so no suite needs an account or a
-network. `.github/workflows/build.yml` — the suites across `ubuntu-latest` and `macos-latest` on
+network. `.github/workflows/build.yml` — the suites across `ubuntu-24.04` and `macos-latest` on
 Python 3.9 and 3.13, plus a Ruff job.

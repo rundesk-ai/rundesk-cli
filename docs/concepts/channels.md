@@ -108,12 +108,56 @@ appears only once it has said enough. The gateway's loop sleeps fifteen seconds 
 draining on the loop *is* that bug. The thread reads lines and records them; the loop asks only
 whether the child is alive, starts one that is not, and stops them all at the end.
 
+An adapter declaring `work` also receives correlated producer endings and recoverable snapshots.
+A separate snapshot worker keeps sampling away from the stdout reader. It reports this gateway's
+open producers and the unfinished turns inherited at startup, using conversation-level claim
+activity without guessing which older turn another process owns. The wire and its limits are in
+[`../extending/adapters.md`](../extending/adapters.md#recovering-correlated-work).
+
 `STANDING` in a listing is asked of the kernel through that claim, exactly as `rundesk gateways` asks
 about a gateway. `connected` means the adapter earned the readiness signal it reports; for Slack,
 that requires Slack's `hello`, not merely a locally opened websocket. Where Slack names the app
 behind that websocket and it is not the app the bot token was issued by, the adapter says so in the
 agent's log and readiness is unaffected — every event would be going to the other app's connections,
 and that is a thing to be told rather than a thing this decides.
+
+## Max Chat transport
+
+The `max` adapter carries text arrivals, steering, commands, progress, correlated work, answers,
+files both ways, notices, delegation lines and child-thread replies, and answers `search` and
+`fetch`. It declares `attach`, `search`, `thread` and `address`.
+
+`--check --endpoint https://chat.example/channel/<tenant-uuid>` checks the binding with
+`MAX_CHANNEL_SECRET`, keeps the endpoint in settings and reports `notices` as its notify place. Only HTTPS is accepted, except literal
+loopback HTTP for isolated tests. Redirects are refused so the bearer secret stays at that endpoint.
+The allow list uses Max's `m<member-id>` sender ids; Rundesk still decides admission.
+
+Inbox reads are short polls, with one outstanding request: three seconds after a completed active
+or fresh poll, fifteen seconds when idle. A bodyless `204` is a successful heartbeat. Posting and
+stdin draining run independently, so a delayed post cannot block a steering message or Stop.
+Work has no timer that ends it. Retryable posting failures keep the same journal record and earn
+no delivery acknowledgement. A `403` marked `"binding": "inactive"` refuses the whole binding
+(Chat switched off) and consumes nothing: polling continues at the idle pace, posts, uploads, claims
+and downloads wait and retry, and search and fetch say Chat is switched off. Any other `403` refuses
+one item. Revocation (`401`) and supersession (`410`, or an allocation conflict)
+exit `78`.
+
+Each outbound record is fsynced before posting, then sent in sequence on a Max-allocated stream.
+The pending allocation nonce survives a restart. A missing record file continues at Max's cursor;
+damaged journal files are preserved in a numbered directory with a warning. Unreadable state is
+left untouched and exits with a retryable code. Rundesk's terminal `done` maps to Max's `succeeded`
+at the transport boundary, including an authoritative `ended.state`; null mark authority stays null.
+The [layout](layout.md#an-agent-is-a-directory-and-everything-it-has-is-inside-it) names the journal files.
+
+| Parity | What the adapter does |
+|---|---|
+| Inbound files | Fetches each through `attachments/{id}` (never the described URL) into `fetched/<run>.<attempt>/<n>` and reports Max's declared size. A body of another size is not handed on: a short one retries the run, a long or refused one is left out with a note |
+| Outbound files | Re-opens every component with `O_NOFOLLOW`, snapshots the approved size and SHA-256 into `outbox/` before journalling, and refuses the whole delivery on any mismatch. Posting stages each snapshot alone through `uploads`, restaging after 20 minutes, then names the uploads in the `deliver`. A refused upload posts the record without them, so Max refuses it and the sequence still advances. A snapshot is kept until a later success proves Max applied its record, so a requested rewind can post it again |
+| Notices | `notice: true` without `to` becomes one copy per allowed `m…` member, each aimed `to.sender` with id `<id>/<member>`. Rundesk hears `delivered` once a copy lands and `failed` only when none did, including across an adapter restart; no delivery id is ever answered twice. `to.place` is refused: the allow list names people only |
+| Child threads | `threaded` travels beside a `reply_to` naming a run attempt, with each piece numbered so only the first can link the run's reply; any other `reply_to` is dropped with it, and the delivery stays in its place |
+| Delegation | Each record is journalled and posted whole; Max renders the line |
+| Search | Pages Max's newest-first search to `limit`, stopping at 50 seconds with `partial`. Days are inclusive. A hit carries each attached file's name, type and size as Max gives them (rundesk shows the name and size), described and not fetched, so a hit with files and no text is kept and only one with neither is skipped; files come through `fetch` by the hit's `ref`. `looked` is left out unless every page counted. A scope must be `t<thread>` (a result's `external_place`) or `m<member>`; a `c<channel>` or `d` place is refused |
+| Fetch | Takes a `t<thread>/<message>` ref, rechecks Max's gates, and lands up to ten files under `fetched/<message>/<n>`, naming any it could not bring in `partial` |
 
 ## Going out: cut to what the platform takes
 

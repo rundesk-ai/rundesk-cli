@@ -167,6 +167,29 @@ class WhatItShouldDo(support.Isolated):
 `self.home` is the scratch root; `self.rundesk(...)` drives the command and hands back
 `(exit code, stdout, stderr)`.
 
+### Test-only kill points
+
+`RUNDESK_TEST_KILL_AT` exists for end-to-end failure runs and nothing else. Unset, empty, or any other
+value, nothing happens. A gateway started with it set hands it to its adapters, alone of its own
+environment.
+
+| Value | Where the process SIGKILLs itself |
+|---|---|
+| `gateway-after-record` | the gateway, after a fresh message is recorded and its receipt said, before a turn starts |
+| `adapter-after-claim` | the `max` adapter, after Max accepts a claim, before the message reaches Rundesk |
+
+Each point first creates `channels/<kind>/test-kill-<value>.fired` exclusively, then kills. It
+stays inert while that marker exists, so a restarted process carries on, and it stays inert if the
+marker cannot be made. While `gateway-after-record` is named and has not fired, the gateway's
+pending sweep leaves that channel alone, so no turn starts between the record and the kill, even in
+the instant after the marker is made. A marker that cannot be made returns the channel to the sweep
+at once. Set it only on a disposable `RUNDESK_HOME`.
+
+`gateway-after-record` assumes one listener per channel. If the adapter is replaced during an F4 run,
+the old listener can still answer its message, so an F4 run must not restart the adapter. The E
+runner's guard voids any run where this happens: it requires zero turns, and Max's run still at
+`seen`, between the kill and the restart.
+
 ## A test is unproven until you have watched it fail
 
 Break the code, run the suite, see red, put the code back. A green test that would stay green with

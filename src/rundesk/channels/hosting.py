@@ -82,10 +82,11 @@ import fcntl
 import itertools
 import json
 import os
+import signal
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional, Protocol, Sequence
+from typing import Any, Dict, List, NamedTuple, Optional, Protocol, Sequence, Set, Tuple
 
 from rundesk.agents import directory
 from rundesk.channels import adapters, arriving, credentials, kept
@@ -111,6 +112,20 @@ ERRORS = "stderr.log"
 #: gateway's opinion of an adapter, it is worthless the moment one starts, and `_started` removes it
 #: for exactly that reason.
 WILL_NOT_START = "will-not-start.json"
+
+#: **Test only.** Names one deterministic SIGKILL point for an end-to-end failure run (the Max
+#: contract's §20 F4 and F5), and is inert unless set. Handed on to an adapter alone of everything
+#: in this process's environment, because the adapter half of the pair is a point inside it.
+KILL_AT = "RUNDESK_TEST_KILL_AT"
+#: The gateway's own point: after a fresh message is recorded and its receipt said, before a turn.
+AFTER_RECORD = "gateway-after-record"
+#: **Test only.** This process's kill points, by `(channel, point)`, between arming and the kill
+#: (`_TEST_KILLING`) and never to fire here (`_TEST_KILL_INERT`, its marker could not be made). The
+#: pending sweep reads both under `_TEST_KILL_LOCK`, the lock arming takes, so it never sees the
+#: marker this process just made while the kill is still on its way.
+_TEST_KILL_LOCK = threading.Lock()
+_TEST_KILLING: Set[Tuple[Path, str]] = set()
+_TEST_KILL_INERT: Set[Tuple[Path, str]] = set()
 
 #: When an adapter's error file is worth moving aside, and how many are kept. The same shape and the
 #: same reasoning as everywhere else: a channel that reconnects noisily for a week must not be able
@@ -448,6 +463,12 @@ class Running(NamedTuple):
     #: gateway loop can replace a live but unreachable adapter without confusing a short reconnect
     #: with a failure.
     disconnected_at: Optional[float] = None
+    #: Ready/loop only signal these. Snapshot sampling never runs on the stdout reader.
+    snapshot_requested: Optional[threading.Event] = None
+    snapshot_forced: Optional[threading.Event] = None
+    snapshot_stopped: Optional[threading.Event] = None
+    snapshotting: Optional[threading.Thread] = None
+    snapshot_lock: Optional[threading.Lock] = None
 
 
 class Watching(NamedTuple):
@@ -619,13 +640,20 @@ def looked(agent: str, where: Path, watching: Watching,
     if answering is not None:
         with contextlib.suppress(Exception):
             _answered_pending(agent, watching, answering)
+    for one in list(watching.running.values()):
+        if one.snapshot_requested is not None and one.connected is not None and one.connected.is_set():
+            one.snapshot_requested.set()
     return watching
 
 
 def _answered_pending(agent: str, watching: Watching, answering: Answering) -> None:
     """Recover messages whose original gateway ended before a turn could claim them."""
+    # A channel whose test-only F4 point is armed is left alone until it fires: its listener has
+    # committed the message and is on its way to the kill, and a turn started here in that window
+    # would be killed with it instead of left for the replacement gateway this point exists to test.
     connected = tuple(kind for kind, running in watching.running.items()
-                      if running.connected is not None and running.connected.is_set())
+                      if running.connected is not None and running.connected.is_set()
+                      and not _armed_for_a_test(at(agent, kind), AFTER_RECORD))
     after, started, conversations_started = 0, 0, set()
     while started < PENDING_STARTED_AT_MOST:
         pending_page = arriving.pending_on_channels(
@@ -675,7 +703,8 @@ def stopping(agent: str, where: Path, watching: Watching, within: float) -> Watc
 
 
 def marked(agent: str, where: Path, watching: Watching, kind: str, place: str,
-           state: str, external_id: Optional[str] = None) -> bool:
+           state: str, external_id: Optional[str] = None,
+           work: Optional[str] = None, work_for: Optional[str] = None) -> bool:
     """Tell a channel what a turn is doing. `False` when nothing was reading that adapter.
 
     **This module owns the wire and never the word.** `seen` is its own — a message arriving is the
@@ -691,10 +720,19 @@ def marked(agent: str, where: Path, watching: Watching, kind: str, place: str,
     said = {"do": "state", "place": place, "state": state}
     if external_id:
         said["external_id"] = external_id
+    if work is not None:
+        said["work"] = work
+        if work_for is not None:
+            said["for"] = work_for
     with contextlib.suppress(Exception):
         _said_to(where, one, said)
         return True
     return False
+
+
+def work_record(where: Path, one: Running, record: Dict[str, Any]) -> bool:
+    """Carry provider-owned work facts under the adapter's ordinary write lock."""
+    return _said_to(where, one, dict(record, do="work"))
 
 
 def doing(agent: str, where: Path, watching: Watching, kind: str, place: str,
@@ -1171,6 +1209,8 @@ def _started(agent: str, where: Path, kind: str, watching: Watching,
         watching.waiting[kind] = time.monotonic()
         return
 
+    supports_work = getattr(answering, "work_supported", None)
+    snapshots = supports_work is not None and supports_work(agent, kind)
     with claiming(agent, kind) as held:
         errors = errors_of(agent, kind)
         errors.parent.mkdir(parents=True, exist_ok=True)
@@ -1198,15 +1238,47 @@ def _started(agent: str, where: Path, kind: str, watching: Watching,
                   talking=talking,
                   listening=None, connected=threading.Event(),
                   since=time.monotonic(), mine=True, saying=threading.Lock(), awaiting={},
-                  posted={}, refused={})
+                  posted={}, refused={},
+                  snapshot_requested=threading.Event() if snapshots else None,
+                  snapshot_forced=threading.Event() if snapshots else None,
+                  snapshot_stopped=threading.Event() if snapshots else None,
+                  snapshot_lock=threading.Lock() if snapshots else None)
     # Put the record in place before the reader starts. An adapter may say `ready` immediately,
     # and the reader must be able to clear a prior disconnect hold against the record it represents.
     watching.running[kind] = one
     listening = threading.Thread(target=_listened, name=f"channel-{kind}",
                                  args=(agent, where, one, row, watching), daemon=True)
-    watching.running[kind] = one._replace(listening=listening)
+    snapshotting = (threading.Thread(target=_snapshots, name=f"work-{kind}",
+                                    args=(agent, where, one), daemon=True) if snapshots else None)
+    watching.running[kind] = one._replace(listening=listening, snapshotting=snapshotting)
+    if snapshotting is not None:
+        snapshotting.start()
     listening.start()
     _note(where, f"channel {kind}: started as pid {talking.pid}")
+
+
+def _snapshots(agent: str, where: Path, one: Running) -> None:
+    """Own snapshot sampling away from the reader that must keep draining the other pipe."""
+    snapshot = getattr(one.answering, "snapshot", None)
+    if snapshot is None:
+        return
+    previous = None
+    while not one.snapshot_stopped.is_set():
+        one.snapshot_requested.wait()
+        one.snapshot_requested.clear()
+        if one.snapshot_stopped.is_set():
+            return
+        holding = one.snapshot_lock if one.snapshot_lock is not None else contextlib.nullcontext()
+        with holding:
+            force = one.snapshot_forced.is_set()
+            one.snapshot_forced.clear()
+        try:
+            previous = snapshot(agent, one.kind, one, previous, force)
+        except Exception as why:  # noqa: BLE001 — a surface cannot end its gateway
+            _note(where, f"channel {one.kind}: work snapshot could not be sent ({why})", logs.WARNING)
+            # Preserve a forced ready snapshot across a transient read or write failure.
+            if force:
+                one.snapshot_forced.set()
 
 
 def _listened(agent: str, where: Path, one: Running, row: Dict[str, Any],
@@ -1264,6 +1336,10 @@ def _listened(agent: str, where: Path, one: Running, row: Dict[str, Any],
     except Exception as why:                           # noqa: BLE001 — see the module docstring
         with contextlib.suppress(Exception):
             _note(where, f"channel {kind}: this gateway stopped listening to it ({why})", logs.ERROR)
+    finally:
+        if one.snapshot_stopped is not None:
+            one.snapshot_stopped.set()
+            one.snapshot_requested.set()
 
 
 def _heard(agent: str, where: Path, one: Running, line: str, admitting: kept.Admitting,
@@ -1287,6 +1363,11 @@ def _heard(agent: str, where: Path, one: Running, line: str, admitting: kept.Adm
     elif saying == "ready":
         if one.connected is not None:
             one.connected.set()
+        if one.snapshot_requested is not None:
+            holding = one.snapshot_lock if one.snapshot_lock is not None else contextlib.nullcontext()
+            with holding:
+                one.snapshot_forced.set()
+                one.snapshot_requested.set()
         if watching is not None:
             current = watching.running.get(kind)
             if current is not None and current.pid == one.pid:
@@ -1459,6 +1540,7 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any],
     kind = one.kind
     who = str(record.get("user") or "")
     if not admitting.admits(who, _where_said(record)):
+        _received(where, one, record, "refused")
         return
     place = str(record.get("conversation") or "")
     body = str(record.get("text") or "")
@@ -1466,8 +1548,10 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any],
     brought = brought if isinstance(brought, list) else []
     external = _a_text(record.get("external_id"))
     if not place:
+        _received(where, one, record, "invalid")
         return
     if not body and not brought:
+        _received(where, one, record, "invalid")
         return
     if brought:
         # **A message that is only a file is still a message.** Requiring text dropped it in total
@@ -1476,6 +1560,7 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any],
         if not body and not here:
             _note(where, f"channel {kind}: a message in {place} brought only files that could not "
                          f"be taken in, so there was nothing to record", logs.WARNING)
+            _received(where, one, record, "empty")
             return
         body = _also_attached(body, here)
     # After the attachments, so the two blocks always stand in one order however many arrived — and
@@ -1493,11 +1578,13 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any],
         # adapter that has just restarted no longer knows it put one up.
         _said_to(where, one, {"do": "state", "place": place, "external_id": external,
                               "state": SEEN})
+    _received(where, one, record, "accepted" if landed.fresh else "duplicate")
     if not landed.fresh:
         # The same message arriving twice. It is marked seen again above, because that mark belongs
         # to the message and an adapter that has just restarted no longer knows it put one up — but
         # answering it twice would be two turns for one question.
         return
+    _killed_for_a_test(at(agent, kind), AFTER_RECORD)
     if one.answering is None:
         # Nothing runs a turn here. Said plainly rather than left to look like something went wrong:
         # a gateway that receives and cannot reply has to say which it is.
@@ -1507,6 +1594,58 @@ def _arrived(agent: str, where: Path, one: Running, record: Dict[str, Any],
     # **Handed on, never run here.** This is the thread reading one adapter's output, and a turn
     # takes minutes — see `Answering`.
     one.answering.answer(agent, kind, place, who, body, external, landed)
+
+
+def _armed_for_a_test(channel: Path, point: str) -> bool:
+    """**Test only:** whether `KILL_AT` names `point` and this process may still fire it.
+
+    Armed from the moment the point is named until this process has killed itself: while its marker
+    is missing, and while this process is between making that marker and the kill. A marker found
+    otherwise was left by a process the point already killed, and one this process could not make
+    leaves the point inert; either way the sweep runs normally.
+    """
+    if os.environ.get(KILL_AT, "") != point:
+        return False
+    with _TEST_KILL_LOCK:
+        if (channel, point) in _TEST_KILLING:
+            return True
+        if (channel, point) in _TEST_KILL_INERT:
+            return False
+        return not os.path.lexists(channel / f"test-kill-{point}.fired")
+
+
+def _killed_for_a_test(channel: Path, point: str) -> None:
+    """**Test only:** end this process by SIGKILL at `point`, once, when `KILL_AT` names it.
+
+    The marker `test-kill-<point>.fired` beside the channel's lock is created exclusively first, so
+    a restarted gateway never kills again and a runner can see the point fired. A marker that cannot
+    be made leaves the point inert rather than killing a process nothing will notice ended.
+    """
+    if os.environ.get(KILL_AT, "") != point:
+        return
+    with _TEST_KILL_LOCK:
+        if (channel, point) in _TEST_KILL_INERT:
+            return
+        _TEST_KILLING.add((channel, point))
+        try:
+            os.close(os.open(str(channel / f"test-kill-{point}.fired"),
+                             os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        except OSError:
+            _TEST_KILLING.discard((channel, point))
+            _TEST_KILL_INERT.add((channel, point))
+            return
+    os.kill(os.getpid(), signal.SIGKILL)
+
+
+def _received(where: Path, one: Running, record: Dict[str, Any], outcome: str) -> None:
+    """A receipt acknowledges recording, before any answering thread can run.
+
+    Invalid tokens are ignored rather than clipped: a clipped token could acknowledge another
+    message. Exceptions before this point deliberately earn no receipt, leaving redelivery safe.
+    """
+    receipt = record.get("receipt")
+    if isinstance(receipt, str) and 0 < len(receipt) <= 64:
+        _said_to(where, one, {"do": "received", "receipt": receipt, "outcome": outcome})
 
 
 def _where_said(record: Dict[str, Any]) -> str:
@@ -1873,10 +2012,15 @@ def _said_to(where: Path, one: Running, record: Dict[str, Any]) -> bool:
 
 def _let_go(agent: str, where: Path, one: Running, watching: Watching) -> None:
     """Close what this process holds for an adapter that is over, and hold off the next start."""
+    if one.snapshot_stopped is not None:
+        one.snapshot_stopped.set()
+        one.snapshot_requested.set()
     if one.talking is not None:
         for end in (one.talking.stdout, one.talking.stdin):
             with contextlib.suppress(Exception):
                 end.close()
+    if one.snapshotting is not None:
+        one.snapshotting.join()
     with contextlib.suppress(OSError):
         files.remove_one(record_of(agent, one.kind))
     watching.running.pop(one.kind, None)
@@ -1962,6 +2106,8 @@ def _the_environment(agent: str, kind: str, row: Dict[str, Any]) -> Dict[str, st
         "RUNDESK_ALLOW_PLACES": ",".join(admitting.places),
     }
     built.update(credentials.handed(agent, _named_secrets(row)))
+    if os.environ.get(KILL_AT):
+        built[KILL_AT] = os.environ[KILL_AT]
     return built
 
 
